@@ -1,0 +1,40 @@
+# Sirr.Client — Sirr .NET SDK
+
+.NET HTTP client for the Sirr ephemeral secret vault API.
+Published to NuGet as `Sirr.Client`. Async-first, built on HttpClient.
+Targets .NET 8+.
+
+## Install
+
+dotnet add package Sirr.Client
+
+## Usage
+
+using Sirr.Client;
+
+var client = new SirrClient(new SirrOptions
+{
+    Server = "http://localhost:39999",
+    Token = "your-key"
+});
+
+await client.PushAsync("DB_PASSWORD", "s3cr3t", ttl: TimeSpan.FromHours(1), reads: 1);
+string? value = await client.GetAsync("DB_PASSWORD");   // null if burned/expired
+await client.DeleteAsync("DB_PASSWORD");
+var secrets = await client.ListAsync();
+var all = await client.PullAllAsync();    // IReadOnlyDictionary<string, string>
+int pruned = await client.PruneAsync();
+
+## Errors
+
+- GetAsync returns null on 404 (burned/expired) — never throws for not-found
+- All other non-2xx responses throw SirrException
+
+## Dependency Injection
+
+services.AddSingleton<SirrClient>(sp =>
+    new SirrClient(new SirrOptions { Server = "...", Token = "..." }));
+
+## Source
+
+github.com/sirrlock/dotnet
