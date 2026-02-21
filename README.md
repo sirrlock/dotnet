@@ -1,3 +1,7 @@
+[![CI](https://github.com/SirrVault/dotnet/actions/workflows/ci.yml/badge.svg)](https://github.com/SirrVault/dotnet/actions/workflows/ci.yml)
+[![NuGet](https://img.shields.io/nuget/v/Sirr.Client)](https://www.nuget.org/packages/Sirr.Client)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 # Sirr.Client (.NET)
 
 **Ephemeral secrets for .NET AI applications. Credentials that expire by design.**

@@ -1,0 +1,21 @@
+## .NET
+bin/
+obj/
+*.nupkg
+*.snupkg
+
+## IDE
+.vs/
+*.user
+*.suo
+*.csproj.user
+
+## Rider
+.idea/
+*.sln.iml
+
+## macOS
+.DS_Store
+
+## Build
+TestResults/
