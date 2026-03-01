@@ -159,7 +159,11 @@ public class DataIngestionService(ISirrClient sirr) : BackgroundService
 
 ## Related
 
-- [SirrVault/sirr](https://github.com/SirrVault/sirr) — server
-- [SirrVault/cli](https://github.com/SirrVault/cli) — CLI
-- [SirrVault/node](https://github.com/SirrVault/node) — Node.js client
-- [SirrVault/python](https://github.com/SirrVault/python) — Python client
+| Package | Description |
+|---------|-------------|
+| [sirr](https://github.com/SirrVault/sirr) | Rust monorepo: `sirrd` server + `sirr` CLI |
+| [@sirrvault/mcp](https://github.com/SirrVault/mcp) | MCP server for AI assistants |
+| [@sirrvault/node](https://github.com/SirrVault/node) | Node.js / TypeScript SDK |
+| [sirr (PyPI)](https://github.com/SirrVault/python) | Python SDK |
+| [sirr.dev](https://sirr.dev) | Documentation |
+| [sirrlock.com](https://sirrlock.com) | Managed cloud + license keys |
