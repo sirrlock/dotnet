@@ -44,7 +44,7 @@ using Sirr;
 
 var sirr = new SirrClient(new SirrOptions
 {
-    Server = Environment.GetEnvironmentVariable("SIRR_SERVER") ?? "http://localhost:8080",
+    Server = Environment.GetEnvironmentVariable("SIRR_SERVER") ?? "http://localhost:39999",
     Token  = Environment.GetEnvironmentVariable("SIRR_TOKEN")!,
 });
 
@@ -164,7 +164,7 @@ Set `Org` on `SirrOptions` to route all secret, audit, webhook, and prune operat
 ```csharp
 var sirr = new SirrClient(new SirrOptions
 {
-    Server = "http://localhost:8080",
+    Server = "http://localhost:39999",
     Token  = Environment.GetEnvironmentVariable("SIRR_TOKEN")!,
     Org    = "acme",
 });
