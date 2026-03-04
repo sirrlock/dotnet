@@ -6,9 +6,9 @@ namespace Sirr;
 public sealed class SirrOptions
 {
     /// <summary>
-    /// Base URL of the Sirr server. Defaults to <c>http://localhost:8080</c>.
+    /// Base URL of the Sirr server. Defaults to <c>http://localhost:39999</c>.
     /// </summary>
-    public string Server { get; set; } = "http://localhost:8080";
+    public string Server { get; set; } = "http://localhost:39999";
 
     /// <summary>
     /// Bearer token for authentication.
