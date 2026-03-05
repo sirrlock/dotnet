@@ -17,6 +17,10 @@ internal sealed class CreateSecretRequest
     [JsonPropertyName("max_reads")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? MaxReads { get; init; }
+
+    [JsonPropertyName("delete")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Delete { get; init; }
 }
 
 internal sealed class CreateSecretResponse
@@ -92,25 +96,6 @@ internal sealed class DeletedResponse
     public required bool Deleted { get; init; }
 }
 
-internal sealed class CreateApiKeyRequest
-{
-    [JsonPropertyName("label")]
-    public required string Label { get; init; }
-
-    [JsonPropertyName("permissions")]
-    public required string[] Permissions { get; init; }
-
-    [JsonPropertyName("prefix")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Prefix { get; init; }
-}
-
-internal sealed class ListApiKeysResponse
-{
-    [JsonPropertyName("keys")]
-    public required ApiKey[] Keys { get; init; }
-}
-
 internal sealed class UpdateMeRequest
 {
     [JsonPropertyName("name")]
@@ -124,12 +109,12 @@ internal sealed class UpdateMeRequest
 
 internal sealed class CreateMeKeyRequest
 {
-    [JsonPropertyName("label")]
-    public required string Label { get; init; }
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
 
-    [JsonPropertyName("permissions")]
+    [JsonPropertyName("valid_for_seconds")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string[]? Permissions { get; init; }
+    public long? ValidForSeconds { get; init; }
 }
 
 internal sealed class CreateOrgRequest
@@ -146,20 +131,11 @@ internal sealed class ListOrgsResponse
 
 internal sealed class CreatePrincipalRequest
 {
-    [JsonPropertyName("email")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Email { get; init; }
-
     [JsonPropertyName("name")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Name { get; init; }
+    public required string Name { get; init; }
 
     [JsonPropertyName("role")]
     public required string Role { get; init; }
-
-    [JsonPropertyName("org")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Org { get; init; }
 }
 
 internal sealed class ListPrincipalsResponse
@@ -181,4 +157,21 @@ internal sealed class ListRolesResponse
 {
     [JsonPropertyName("roles")]
     public required RoleResponse[] Roles { get; init; }
+}
+
+internal sealed class PatchSecretRequest
+{
+    [JsonPropertyName("ttl_seconds")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? TtlSeconds { get; init; }
+
+    [JsonPropertyName("max_reads")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxReads { get; init; }
+}
+
+internal sealed class PatchSecretResponse
+{
+    [JsonPropertyName("key")]
+    public string? Key { get; init; }
 }

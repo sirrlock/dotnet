@@ -57,6 +57,9 @@ string? value = await sirr.GetAsync("API_KEY");
 // Pull all into a dictionary
 IDictionary<string, string> secrets = await sirr.PullAllAsync();
 
+// Update TTL or read budget without changing the value
+await sirr.PatchAsync("API_KEY", ttl: TimeSpan.FromHours(2), reads: 5);
+
 // Delete immediately
 await sirr.DeleteAsync("API_KEY");
 

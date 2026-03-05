@@ -24,5 +24,5 @@ public sealed record PrincipalResponse
     public string? Org { get; init; }
 
     [JsonPropertyName("created_at")]
-    public required long CreatedAt { get; init; }
+    public long CreatedAt { get; init; }
 }

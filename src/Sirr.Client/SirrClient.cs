@@ -107,7 +107,7 @@ public sealed class SirrClient : ISirrClient, IDisposable
     // --- Secrets ---
 
     /// <inheritdoc />
-    public async Task PushAsync(string key, string value, TimeSpan? ttl = null, int? reads = null, CancellationToken ct = default)
+    public async Task PushAsync(string key, string value, TimeSpan? ttl = null, int? reads = null, bool? sealOnExpiry = null, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(value);
@@ -118,9 +118,26 @@ public sealed class SirrClient : ISirrClient, IDisposable
             Value = value,
             TtlSeconds = ttl.HasValue ? (long)ttl.Value.TotalSeconds : null,
             MaxReads = reads,
+            // sealOnExpiry=true → delete=false (seal mode, PATCH allowed)
+            // sealOnExpiry=false/null → delete=true (burn-after-read, server default)
+            Delete = sealOnExpiry.HasValue ? !sealOnExpiry.Value : null,
         };
 
         await SendAsync<CreateSecretResponse>(HttpMethod.Post, SecretsPath(), payload, ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task PatchAsync(string key, TimeSpan? ttl = null, int? reads = null, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(key);
+
+        var payload = new PatchSecretRequest
+        {
+            TtlSeconds = ttl.HasValue ? (long)ttl.Value.TotalSeconds : null,
+            MaxReads = reads,
+        };
+
+        await SendAsync<PatchSecretResponse>(HttpMethod.Patch, SecretsPath(key), payload, ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -258,44 +275,6 @@ public sealed class SirrClient : ISirrClient, IDisposable
         }
     }
 
-    // --- API Keys ---
-
-    /// <inheritdoc />
-    public async Task<ApiKeyCreateResult> CreateApiKeyAsync(string label, string[]? permissions = null, string? prefix = null, CancellationToken ct = default)
-    {
-        var payload = new CreateApiKeyRequest
-        {
-            Label = label,
-            Permissions = permissions ?? new[] { "read", "write" },
-            Prefix = prefix,
-        };
-        return await SendAsync<ApiKeyCreateResult>(HttpMethod.Post, "/keys", payload, ct)
-            .ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
-    public async Task<IReadOnlyList<ApiKey>> ListApiKeysAsync(CancellationToken ct = default)
-    {
-        var response = await SendAsync<ListApiKeysResponse>(HttpMethod.Get, "/keys", content: null, ct)
-            .ConfigureAwait(false);
-        return response.Keys;
-    }
-
-    /// <inheritdoc />
-    public async Task<bool> DeleteApiKeyAsync(string id, CancellationToken ct = default)
-    {
-        try
-        {
-            await SendAsync<DeletedResponse>(HttpMethod.Delete, $"/keys/{Uri.EscapeDataString(id)}", content: null, ct)
-                .ConfigureAwait(false);
-            return true;
-        }
-        catch (SirrException ex) when (ex.StatusCode == (int)HttpStatusCode.NotFound)
-        {
-            return false;
-        }
-    }
-
     // --- /me ---
 
     /// <inheritdoc />
@@ -314,9 +293,9 @@ public sealed class SirrClient : ISirrClient, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<KeyCreateResult> CreateMeKeyAsync(string label, string[]? permissions = null, CancellationToken ct = default)
+    public async Task<KeyCreateResult> CreateMeKeyAsync(string name, long? validForSeconds = null, CancellationToken ct = default)
     {
-        var payload = new CreateMeKeyRequest { Label = label, Permissions = permissions };
+        var payload = new CreateMeKeyRequest { Name = name, ValidForSeconds = validForSeconds };
         return await SendAsync<KeyCreateResult>(HttpMethod.Post, "/me/keys", payload, ct)
             .ConfigureAwait(false);
     }
@@ -342,14 +321,14 @@ public sealed class SirrClient : ISirrClient, IDisposable
     public async Task<OrgResponse> CreateOrgAsync(string name, CancellationToken ct = default)
     {
         var payload = new CreateOrgRequest { Name = name };
-        return await SendAsync<OrgResponse>(HttpMethod.Post, "/admin/orgs", payload, ct)
+        return await SendAsync<OrgResponse>(HttpMethod.Post, "/orgs", payload, ct)
             .ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<OrgResponse>> ListOrgsAsync(CancellationToken ct = default)
     {
-        var response = await SendAsync<ListOrgsResponse>(HttpMethod.Get, "/admin/orgs", content: null, ct)
+        var response = await SendAsync<ListOrgsResponse>(HttpMethod.Get, "/orgs", content: null, ct)
             .ConfigureAwait(false);
         return response.Orgs;
     }
@@ -359,7 +338,7 @@ public sealed class SirrClient : ISirrClient, IDisposable
     {
         try
         {
-            await SendAsync<DeletedResponse>(HttpMethod.Delete, $"/admin/orgs/{Uri.EscapeDataString(id)}", content: null, ct)
+            await SendAsync<DeletedResponse>(HttpMethod.Delete, $"/orgs/{Uri.EscapeDataString(id)}", content: null, ct)
                 .ConfigureAwait(false);
             return true;
         }
@@ -372,27 +351,30 @@ public sealed class SirrClient : ISirrClient, IDisposable
     // --- Admin: Principals ---
 
     /// <inheritdoc />
-    public async Task<PrincipalResponse> CreatePrincipalAsync(string role, string? email = null, string? name = null, string? org = null, CancellationToken ct = default)
+    public async Task<PrincipalResponse> CreatePrincipalAsync(string orgId, string role, string name, CancellationToken ct = default)
     {
-        var payload = new CreatePrincipalRequest { Role = role, Email = email, Name = name, Org = org };
-        return await SendAsync<PrincipalResponse>(HttpMethod.Post, "/admin/principals", payload, ct)
+        var payload = new CreatePrincipalRequest { Role = role, Name = name };
+        return await SendAsync<PrincipalResponse>(HttpMethod.Post,
+            $"/orgs/{Uri.EscapeDataString(orgId)}/principals", payload, ct)
             .ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<PrincipalResponse>> ListPrincipalsAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<PrincipalResponse>> ListPrincipalsAsync(string orgId, CancellationToken ct = default)
     {
-        var response = await SendAsync<ListPrincipalsResponse>(HttpMethod.Get, "/admin/principals", content: null, ct)
+        var response = await SendAsync<ListPrincipalsResponse>(HttpMethod.Get,
+            $"/orgs/{Uri.EscapeDataString(orgId)}/principals", content: null, ct)
             .ConfigureAwait(false);
         return response.Principals;
     }
 
     /// <inheritdoc />
-    public async Task<bool> DeletePrincipalAsync(string id, CancellationToken ct = default)
+    public async Task<bool> DeletePrincipalAsync(string orgId, string id, CancellationToken ct = default)
     {
         try
         {
-            await SendAsync<DeletedResponse>(HttpMethod.Delete, $"/admin/principals/{Uri.EscapeDataString(id)}", content: null, ct)
+            await SendAsync<DeletedResponse>(HttpMethod.Delete,
+                $"/orgs/{Uri.EscapeDataString(orgId)}/principals/{Uri.EscapeDataString(id)}", content: null, ct)
                 .ConfigureAwait(false);
             return true;
         }
@@ -405,27 +387,30 @@ public sealed class SirrClient : ISirrClient, IDisposable
     // --- Admin: Roles ---
 
     /// <inheritdoc />
-    public async Task<RoleResponse> CreateRoleAsync(string name, string[] permissions, CancellationToken ct = default)
+    public async Task<RoleResponse> CreateRoleAsync(string orgId, string name, string[] permissions, CancellationToken ct = default)
     {
         var payload = new CreateRoleRequest { Name = name, Permissions = permissions };
-        return await SendAsync<RoleResponse>(HttpMethod.Post, "/admin/roles", payload, ct)
+        return await SendAsync<RoleResponse>(HttpMethod.Post,
+            $"/orgs/{Uri.EscapeDataString(orgId)}/roles", payload, ct)
             .ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<RoleResponse>> ListRolesAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<RoleResponse>> ListRolesAsync(string orgId, CancellationToken ct = default)
     {
-        var response = await SendAsync<ListRolesResponse>(HttpMethod.Get, "/admin/roles", content: null, ct)
+        var response = await SendAsync<ListRolesResponse>(HttpMethod.Get,
+            $"/orgs/{Uri.EscapeDataString(orgId)}/roles", content: null, ct)
             .ConfigureAwait(false);
         return response.Roles;
     }
 
     /// <inheritdoc />
-    public async Task<bool> DeleteRoleAsync(string id, CancellationToken ct = default)
+    public async Task<bool> DeleteRoleAsync(string orgId, string name, CancellationToken ct = default)
     {
         try
         {
-            await SendAsync<DeletedResponse>(HttpMethod.Delete, $"/admin/roles/{Uri.EscapeDataString(id)}", content: null, ct)
+            await SendAsync<DeletedResponse>(HttpMethod.Delete,
+                $"/orgs/{Uri.EscapeDataString(orgId)}/roles/{Uri.EscapeDataString(name)}", content: null, ct)
                 .ConfigureAwait(false);
             return true;
         }
@@ -463,12 +448,22 @@ public sealed class SirrClient : ISirrClient, IDisposable
 
         if (!response.IsSuccessStatusCode)
         {
-            var errorBody = await response.Content.ReadFromJsonAsync<ErrorResponse>(JsonOptions, ct)
-                .ConfigureAwait(false);
+            string? errorMessage = null;
+            try
+            {
+                var errorBody = await response.Content.ReadFromJsonAsync<ErrorResponse>(JsonOptions, ct)
+                    .ConfigureAwait(false);
+                errorMessage = errorBody?.Error;
+            }
+            catch (JsonException)
+            {
+                // Non-JSON error body (e.g. rate-limiter plain-text responses)
+                errorMessage = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            }
 
             throw new SirrException(
                 (int)response.StatusCode,
-                errorBody?.Error ?? response.ReasonPhrase ?? "Unknown error");
+                errorMessage ?? response.ReasonPhrase ?? "Unknown error");
         }
 
         var result = await response.Content.ReadFromJsonAsync<T>(JsonOptions, ct).ConfigureAwait(false);

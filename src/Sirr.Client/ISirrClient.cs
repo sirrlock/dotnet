@@ -12,8 +12,17 @@ public interface ISirrClient
 
     /// <summary>
     /// Stores a secret with optional TTL and read limit.
+    /// When <paramref name="sealOnExpiry"/> is <c>true</c>, the secret enters seal mode
+    /// (reads return 410 after the read budget is exhausted) and can be updated with
+    /// <see cref="PatchAsync"/>. Defaults to <c>null</c> (server default: burn-after-read).
     /// </summary>
-    Task PushAsync(string key, string value, TimeSpan? ttl = null, int? reads = null, CancellationToken ct = default);
+    Task PushAsync(string key, string value, TimeSpan? ttl = null, int? reads = null, bool? sealOnExpiry = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Updates the TTL or read budget of an existing secret without changing its value.
+    /// Only works on secrets pushed with <c>sealOnExpiry: true</c>.
+    /// </summary>
+    Task PatchAsync(string key, TimeSpan? ttl = null, int? reads = null, CancellationToken ct = default);
 
     /// <summary>
     /// Retrieves a secret value. Returns <c>null</c> if the secret is burned, expired, or does not exist.
@@ -67,21 +76,6 @@ public interface ISirrClient
     /// </summary>
     Task<bool> DeleteWebhookAsync(string id, CancellationToken ct = default);
 
-    /// <summary>
-    /// Creates a scoped API key. The raw key is returned once.
-    /// </summary>
-    Task<ApiKeyCreateResult> CreateApiKeyAsync(string label, string[]? permissions = null, string? prefix = null, CancellationToken ct = default);
-
-    /// <summary>
-    /// Lists all scoped API keys. Key hashes are never returned.
-    /// </summary>
-    Task<IReadOnlyList<ApiKey>> ListApiKeysAsync(CancellationToken ct = default);
-
-    /// <summary>
-    /// Deletes an API key by ID. Returns <c>false</c> if it did not exist.
-    /// </summary>
-    Task<bool> DeleteApiKeyAsync(string id, CancellationToken ct = default);
-
     // --- /me ---
 
     /// <summary>
@@ -97,7 +91,7 @@ public interface ISirrClient
     /// <summary>
     /// Creates a personal API key scoped to the authenticated principal.
     /// </summary>
-    Task<KeyCreateResult> CreateMeKeyAsync(string label, string[]? permissions = null, CancellationToken ct = default);
+    Task<KeyCreateResult> CreateMeKeyAsync(string name, long? validForSeconds = null, CancellationToken ct = default);
 
     /// <summary>
     /// Deletes a personal API key by ID. Returns <c>false</c> if it did not exist.
@@ -124,34 +118,34 @@ public interface ISirrClient
     // --- Admin: Principals ---
 
     /// <summary>
-    /// Creates a new principal (user or service account).
+    /// Creates a new principal (user or service account) in an organization.
     /// </summary>
-    Task<PrincipalResponse> CreatePrincipalAsync(string role, string? email = null, string? name = null, string? org = null, CancellationToken ct = default);
+    Task<PrincipalResponse> CreatePrincipalAsync(string orgId, string role, string name, CancellationToken ct = default);
 
     /// <summary>
-    /// Lists all principals.
+    /// Lists all principals in an organization.
     /// </summary>
-    Task<IReadOnlyList<PrincipalResponse>> ListPrincipalsAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<PrincipalResponse>> ListPrincipalsAsync(string orgId, CancellationToken ct = default);
 
     /// <summary>
-    /// Deletes a principal by ID. Returns <c>false</c> if it did not exist.
+    /// Deletes a principal by ID from an organization. Returns <c>false</c> if it did not exist.
     /// </summary>
-    Task<bool> DeletePrincipalAsync(string id, CancellationToken ct = default);
+    Task<bool> DeletePrincipalAsync(string orgId, string id, CancellationToken ct = default);
 
     // --- Admin: Roles ---
 
     /// <summary>
-    /// Creates a new role.
+    /// Creates a new role in an organization.
     /// </summary>
-    Task<RoleResponse> CreateRoleAsync(string name, string[] permissions, CancellationToken ct = default);
+    Task<RoleResponse> CreateRoleAsync(string orgId, string name, string[] permissions, CancellationToken ct = default);
 
     /// <summary>
-    /// Lists all roles.
+    /// Lists all roles in an organization.
     /// </summary>
-    Task<IReadOnlyList<RoleResponse>> ListRolesAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<RoleResponse>> ListRolesAsync(string orgId, CancellationToken ct = default);
 
     /// <summary>
-    /// Deletes a role by ID. Returns <c>false</c> if it did not exist.
+    /// Deletes a role by name from an organization. Returns <c>false</c> if it did not exist.
     /// </summary>
-    Task<bool> DeleteRoleAsync(string id, CancellationToken ct = default);
+    Task<bool> DeleteRoleAsync(string orgId, string name, CancellationToken ct = default);
 }

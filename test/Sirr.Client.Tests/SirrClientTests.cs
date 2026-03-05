@@ -108,6 +108,62 @@ public sealed class SirrClientTests
         Assert.Equal("test-token", auth.Parameter);
     }
 
+    // --- Patch ---
+
+    [Fact]
+    public async Task PatchAsync_SendsCorrectRequest()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueOk(new { key = "K" });
+
+        await client.PatchAsync("K", ttl: TimeSpan.FromHours(2), reads: 5);
+
+        var request = handler.Requests[0];
+        Assert.Equal(HttpMethod.Patch, request.Method);
+        Assert.Equal("/secrets/K", request.RequestUri!.AbsolutePath);
+
+        using var doc = JsonDocument.Parse(request.Body!);
+        var root = doc.RootElement;
+        Assert.Equal(7200, root.GetProperty("ttl_seconds").GetInt64());
+        Assert.Equal(5, root.GetProperty("max_reads").GetInt32());
+    }
+
+    [Fact]
+    public async Task PatchAsync_OmitsNullFields()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueOk(new { key = "K" });
+
+        await client.PatchAsync("K", ttl: TimeSpan.FromHours(1));
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        var root = doc.RootElement;
+        Assert.True(root.TryGetProperty("ttl_seconds", out _));
+        Assert.False(root.TryGetProperty("max_reads", out _));
+    }
+
+    [Fact]
+    public async Task PatchAsync_Throws_OnNonSuccess()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueError(HttpStatusCode.NotFound, "not found");
+
+        var ex = await Assert.ThrowsAsync<SirrException>(() => client.PatchAsync("K", ttl: TimeSpan.FromHours(1)));
+        Assert.Equal(404, ex.StatusCode);
+    }
+
+    [Fact]
+    public async Task OrgClient_PatchAsync_UsesOrgScopedPath()
+    {
+        var handler = new MockHttpHandler();
+        var client = CreateOrgScopedClient("acme", handler);
+        handler.EnqueueOk(new { key = "K" });
+
+        await client.PatchAsync("K", ttl: TimeSpan.FromHours(1));
+
+        Assert.Equal("/orgs/acme/secrets/K", handler.Requests[0].RequestUri!.AbsolutePath);
+    }
+
     // --- Get ---
 
     [Fact]
@@ -432,56 +488,6 @@ public sealed class SirrClientTests
         Assert.False(await client.DeleteWebhookAsync("wh_x"));
     }
 
-    // --- API Keys ---
-
-    [Fact]
-    public async Task CreateApiKeyAsync_ReturnsResult()
-    {
-        var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { id = "abc", key = "sirr_key_123", label = "ci", permissions = ReadPermission, prefix = (string?)null });
-
-        var result = await client.CreateApiKeyAsync("ci", permissions: ReadPermission);
-
-        Assert.Equal("abc", result.Id);
-        Assert.Equal("sirr_key_123", result.Key);
-    }
-
-    [Fact]
-    public async Task ListApiKeysAsync_ReturnsKeys()
-    {
-        var (client, handler) = CreateClient();
-        handler.EnqueueOk(new
-        {
-            keys = new[]
-            {
-                new { id = "abc", label = "ci", permissions = ReadPermission, prefix = (string?)null, created_at = 1000L },
-            }
-        });
-
-        var result = await client.ListApiKeysAsync();
-
-        Assert.Single(result);
-        Assert.Equal("abc", result[0].Id);
-    }
-
-    [Fact]
-    public async Task DeleteApiKeyAsync_ReturnsTrue()
-    {
-        var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { deleted = true });
-
-        Assert.True(await client.DeleteApiKeyAsync("abc"));
-    }
-
-    [Fact]
-    public async Task DeleteApiKeyAsync_ReturnsFalse_On404()
-    {
-        var (client, handler) = CreateClient();
-        handler.EnqueueNotFound();
-
-        Assert.False(await client.DeleteApiKeyAsync("nope"));
-    }
-
     // --- Org-scoped paths ---
 
     [Fact]
@@ -631,12 +637,16 @@ public sealed class SirrClientTests
         var (client, handler) = CreateClient();
         handler.EnqueueOk(new { id = "key_1", key = "sirr_me_abc" });
 
-        var result = await client.CreateMeKeyAsync("my-key");
+        var result = await client.CreateMeKeyAsync("my-key", validForSeconds: 3600);
 
         Assert.Equal("key_1", result.Id);
         Assert.Equal("sirr_me_abc", result.Key);
         Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
         Assert.Equal("/me/keys", handler.Requests[0].RequestUri!.AbsolutePath);
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        Assert.Equal("my-key", doc.RootElement.GetProperty("name").GetString());
+        Assert.Equal(3600, doc.RootElement.GetProperty("valid_for_seconds").GetInt64());
     }
 
     [Fact]
@@ -671,7 +681,7 @@ public sealed class SirrClientTests
         Assert.Equal("org_1", result.Id);
         Assert.Equal("Acme", result.Name);
         Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
-        Assert.Equal("/admin/orgs", handler.Requests[0].RequestUri!.AbsolutePath);
+        Assert.Equal("/orgs", handler.Requests[0].RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -690,7 +700,7 @@ public sealed class SirrClientTests
 
         Assert.Single(result);
         Assert.Equal("org_1", result[0].Id);
-        Assert.Equal("/admin/orgs", handler.Requests[0].RequestUri!.AbsolutePath);
+        Assert.Equal("/orgs", handler.Requests[0].RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -700,7 +710,7 @@ public sealed class SirrClientTests
         handler.EnqueueOk(new { deleted = true });
 
         Assert.True(await client.DeleteOrgAsync("org_1"));
-        Assert.Equal("/admin/orgs/org_1", handler.Requests[0].RequestUri!.AbsolutePath);
+        Assert.Equal("/orgs/org_1", handler.Requests[0].RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -718,14 +728,18 @@ public sealed class SirrClientTests
     public async Task CreatePrincipalAsync_ReturnsPrincipal()
     {
         var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { id = "usr_1", email = "a@b.com", name = "Alice", role = "member", org = "acme", created_at = 1000L });
+        handler.EnqueueOk(new { id = "usr_1", name = "Alice", role = "member", org = "org_1", created_at = 1000L });
 
-        var result = await client.CreatePrincipalAsync("member", email: "a@b.com", name: "Alice", org: "acme");
+        var result = await client.CreatePrincipalAsync("org_1", "member", "Alice");
 
         Assert.Equal("usr_1", result.Id);
         Assert.Equal("member", result.Role);
         Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
-        Assert.Equal("/admin/principals", handler.Requests[0].RequestUri!.AbsolutePath);
+        Assert.Equal("/orgs/org_1/principals", handler.Requests[0].RequestUri!.AbsolutePath);
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        Assert.Equal("Alice", doc.RootElement.GetProperty("name").GetString());
+        Assert.Equal("member", doc.RootElement.GetProperty("role").GetString());
     }
 
     [Fact]
@@ -736,15 +750,15 @@ public sealed class SirrClientTests
         {
             principals = new[]
             {
-                new { id = "usr_1", role = "admin", created_at = 1000L },
+                new { id = "usr_1", name = "Alice", role = "admin", created_at = 1000L },
             }
         });
 
-        var result = await client.ListPrincipalsAsync();
+        var result = await client.ListPrincipalsAsync("org_1");
 
         Assert.Single(result);
         Assert.Equal("usr_1", result[0].Id);
-        Assert.Equal("/admin/principals", handler.Requests[0].RequestUri!.AbsolutePath);
+        Assert.Equal("/orgs/org_1/principals", handler.Requests[0].RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -753,8 +767,8 @@ public sealed class SirrClientTests
         var (client, handler) = CreateClient();
         handler.EnqueueOk(new { deleted = true });
 
-        Assert.True(await client.DeletePrincipalAsync("usr_1"));
-        Assert.Equal("/admin/principals/usr_1", handler.Requests[0].RequestUri!.AbsolutePath);
+        Assert.True(await client.DeletePrincipalAsync("org_1", "usr_1"));
+        Assert.Equal("/orgs/org_1/principals/usr_1", handler.Requests[0].RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -763,7 +777,7 @@ public sealed class SirrClientTests
         var (client, handler) = CreateClient();
         handler.EnqueueNotFound();
 
-        Assert.False(await client.DeletePrincipalAsync("nope"));
+        Assert.False(await client.DeletePrincipalAsync("org_1", "nope"));
     }
 
     // --- Admin: Roles ---
@@ -774,12 +788,12 @@ public sealed class SirrClientTests
         var (client, handler) = CreateClient();
         handler.EnqueueOk(new { id = "role_1", name = "viewer", permissions = ReadPermission, created_at = 1000L });
 
-        var result = await client.CreateRoleAsync("viewer", ReadPermission);
+        var result = await client.CreateRoleAsync("org_1", "viewer", ReadPermission);
 
         Assert.Equal("role_1", result.Id);
         Assert.Equal("viewer", result.Name);
         Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
-        Assert.Equal("/admin/roles", handler.Requests[0].RequestUri!.AbsolutePath);
+        Assert.Equal("/orgs/org_1/roles", handler.Requests[0].RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -794,11 +808,11 @@ public sealed class SirrClientTests
             }
         });
 
-        var result = await client.ListRolesAsync();
+        var result = await client.ListRolesAsync("org_1");
 
         Assert.Single(result);
         Assert.Equal("role_1", result[0].Id);
-        Assert.Equal("/admin/roles", handler.Requests[0].RequestUri!.AbsolutePath);
+        Assert.Equal("/orgs/org_1/roles", handler.Requests[0].RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -807,8 +821,8 @@ public sealed class SirrClientTests
         var (client, handler) = CreateClient();
         handler.EnqueueOk(new { deleted = true });
 
-        Assert.True(await client.DeleteRoleAsync("role_1"));
-        Assert.Equal("/admin/roles/role_1", handler.Requests[0].RequestUri!.AbsolutePath);
+        Assert.True(await client.DeleteRoleAsync("org_1", "viewer"));
+        Assert.Equal("/orgs/org_1/roles/viewer", handler.Requests[0].RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -817,7 +831,7 @@ public sealed class SirrClientTests
         var (client, handler) = CreateClient();
         handler.EnqueueNotFound();
 
-        Assert.False(await client.DeleteRoleAsync("nope"));
+        Assert.False(await client.DeleteRoleAsync("org_1", "nope"));
     }
 
     // --- Helper to create an org-scoped client with a mock handler ---
