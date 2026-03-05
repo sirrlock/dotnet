@@ -1,8 +1,12 @@
-[![CI](https://github.com/sirrlock/dotnet/actions/workflows/ci.yml/badge.svg)](https://github.com/sirrlock/dotnet/actions/workflows/ci.yml)
-[![NuGet](https://img.shields.io/nuget/v/Sirr.Client)](https://www.nuget.org/packages/Sirr.Client)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
 # Sirr.Client (.NET)
+
+[![NuGet version](https://img.shields.io/nuget/v/Sirr.Client)](https://www.nuget.org/packages/Sirr.Client/)
+[![NuGet downloads](https://img.shields.io/nuget/dt/Sirr.Client)](https://www.nuget.org/packages/Sirr.Client/)
+[![CI](https://github.com/sirrlock/dotnet/actions/workflows/ci.yml/badge.svg)](https://github.com/sirrlock/dotnet/actions/workflows/ci.yml)
+[![.NET](https://img.shields.io/badge/.NET-%3E%3D8-purple)](https://dotnet.microsoft.com)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/sirrlock/dotnet)](https://github.com/sirrlock/dotnet)
+[![Last commit](https://img.shields.io/github/last-commit/sirrlock/dotnet)](https://github.com/sirrlock/dotnet)
 
 **Ephemeral secrets for .NET AI applications. Credentials that expire by design.**
 
@@ -51,14 +55,27 @@ var sirr = new SirrClient(new SirrOptions
 // Push a one-time secret
 await sirr.PushAsync("API_KEY", "sk-...", ttl: TimeSpan.FromHours(1), reads: 1);
 
+// Push with a webhook notification on read/burn
+await sirr.PushAsync("API_KEY", "sk-...", reads: 1, webhookUrl: "https://hooks.example.com/sirr");
+
+// Push in seal mode — secret blocks after reads exhausted, refreshable via PatchAsync
+await sirr.PushAsync("RENEWABLE", "value", reads: 5, sealOnExpiry: true);
+
+// Push with access restricted to specific API key IDs (org-scoped only)
+await sirr.PushAsync("TEAM_SECRET", "value", allowedKeys: ["key_abc123", "key_def456"]);
+
+// Check existence without consuming a read
+SecretStatus? status = await sirr.HeadAsync("API_KEY");
+// status?.ReadCount, status?.ReadsRemaining, status?.IsSealed, status?.ExpiresAt
+
 // Retrieve — null if burned or expired
 string? value = await sirr.GetAsync("API_KEY");
 
 // Pull all into a dictionary
 IDictionary<string, string> secrets = await sirr.PullAllAsync();
 
-// Update TTL or read budget without changing the value
-await sirr.PatchAsync("API_KEY", ttl: TimeSpan.FromHours(2), reads: 5);
+// Update value, TTL, or read budget on a seal-mode secret (resets read counter)
+await sirr.PatchAsync("RENEWABLE", value: "new-value", ttl: TimeSpan.FromHours(2), reads: 5);
 
 // Delete immediately
 await sirr.DeleteAsync("API_KEY");
@@ -192,36 +209,51 @@ builder.Services.AddSirrClient(options =>
 
 ```csharp
 // Get the authenticated principal's profile
-var me = await sirr.GetMeAsync();
+MeResponse me = await sirr.GetMeAsync();
+// me.Id, me.Name, me.Role, me.OrgId, me.Metadata, me.CreatedAt, me.Keys
 
-// Update profile
-var updated = await sirr.UpdateMeAsync(name: "Alice");
+// Update metadata
+MeResponse updated = await sirr.UpdateMeAsync(new Dictionary<string, string>
+{
+    ["team"] = "platform",
+    ["env"]  = "prod",
+});
 
-// Create a personal API key
-var key = await sirr.CreateMeKeyAsync("ci-key");
-Console.WriteLine(key.Key); // shown once
+// Create a personal API key (shown only once)
+KeyCreateResult key = await sirr.CreateMeKeyAsync("ci-key");
+Console.WriteLine(key.Key); // store this — not retrievable again
 
-// Delete a personal key
+// Create a time-limited key — either by duration or absolute expiry (Unix epoch seconds)
+KeyCreateResult limited = await sirr.CreateMeKeyAsync("deploy-key", validForSeconds: 3600);
+KeyCreateResult expires = await sirr.CreateMeKeyAsync("until-key", validBefore: 1800000000L);
+
+// Delete a personal key by ID
 await sirr.DeleteMeKeyAsync(key.Id);
 ```
 
 ### Admin Endpoints
 
 ```csharp
-// Orgs
-var org = await sirr.CreateOrgAsync("Acme Corp");
-var orgs = await sirr.ListOrgsAsync();
+// --- Orgs ---
+OrgResponse org = await sirr.CreateOrgAsync("Acme Corp", metadata: new() { ["tier"] = "pro" });
+IReadOnlyList<OrgResponse> orgs = await sirr.ListOrgsAsync();
 await sirr.DeleteOrgAsync(org.Id);
 
-// Principals
-var principal = await sirr.CreatePrincipalAsync("member", email: "alice@acme.com", org: "acme");
-var principals = await sirr.ListPrincipalsAsync();
-await sirr.DeletePrincipalAsync(principal.Id);
+// --- Principals ---
+PrincipalResponse principal = await sirr.CreatePrincipalAsync(
+    orgId: org.Id,
+    role: "member",
+    name: "Alice",
+    metadata: new() { ["email"] = "alice@acme.com" });
 
-// Roles
-var role = await sirr.CreateRoleAsync("viewer", new[] { "read" });
-var roles = await sirr.ListRolesAsync();
-await sirr.DeleteRoleAsync(role.Id);
+IReadOnlyList<PrincipalResponse> principals = await sirr.ListPrincipalsAsync(org.Id);
+await sirr.DeletePrincipalAsync(org.Id, principal.Id);
+
+// --- Roles ---
+// permissions is a letter string: C=Create W=Write R=Read D=Delete S=Seal
+RoleResponse role = await sirr.CreateRoleAsync(org.Id, "viewer", permissions: "R");
+IReadOnlyList<RoleResponse> roles = await sirr.ListRolesAsync(org.Id);
+await sirr.DeleteRoleAsync(org.Id, role.Name);
 ```
 
 ---

@@ -39,6 +39,14 @@ internal sealed class MockHttpHandler : HttpMessageHandler
     public void EnqueueError(HttpStatusCode status, string message) =>
         Enqueue(status, new { error = message });
 
+    public void EnqueueHead(HttpStatusCode status, Dictionary<string, string> headers)
+    {
+        var response = new HttpResponseMessage(status);
+        foreach (var (k, v) in headers)
+            response.Headers.TryAddWithoutValidation(k, v);
+        _responses.Enqueue(response);
+    }
+
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)

@@ -107,7 +107,7 @@ public sealed class SirrClient : ISirrClient, IDisposable
     // --- Secrets ---
 
     /// <inheritdoc />
-    public async Task PushAsync(string key, string value, TimeSpan? ttl = null, int? reads = null, bool? sealOnExpiry = null, CancellationToken ct = default)
+    public async Task PushAsync(string key, string value, TimeSpan? ttl = null, int? reads = null, bool? sealOnExpiry = null, string? webhookUrl = null, string[]? allowedKeys = null, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(value);
@@ -121,23 +121,60 @@ public sealed class SirrClient : ISirrClient, IDisposable
             // sealOnExpiry=true → delete=false (seal mode, PATCH allowed)
             // sealOnExpiry=false/null → delete=true (burn-after-read, server default)
             Delete = sealOnExpiry.HasValue ? !sealOnExpiry.Value : null,
+            WebhookUrl = webhookUrl,
+            // allowed_keys is only accepted by the org-scoped secret endpoint
+            AllowedKeys = _org is not null ? allowedKeys : null,
         };
 
         await SendAsync<CreateSecretResponse>(HttpMethod.Post, SecretsPath(), payload, ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public async Task PatchAsync(string key, TimeSpan? ttl = null, int? reads = null, CancellationToken ct = default)
+    public async Task PatchAsync(string key, string? value = null, TimeSpan? ttl = null, int? reads = null, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
 
         var payload = new PatchSecretRequest
         {
+            Value = value,
             TtlSeconds = ttl.HasValue ? (long)ttl.Value.TotalSeconds : null,
             MaxReads = reads,
         };
 
         await SendAsync<PatchSecretResponse>(HttpMethod.Patch, SecretsPath(key), payload, ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<SecretStatus?> HeadAsync(string key, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(key);
+
+        using var request = new HttpRequestMessage(HttpMethod.Head, SecretsPath(key));
+        using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            return null;
+
+        var isSealed = response.StatusCode == System.Net.HttpStatusCode.Gone;
+
+        static int? ParseNullableInt(System.Net.Http.Headers.HttpResponseHeaders headers, string name) =>
+            headers.TryGetValues(name, out var vals) && int.TryParse(vals.FirstOrDefault(), out var n) ? n : null;
+
+        static long? ParseNullableLong(System.Net.Http.Headers.HttpResponseHeaders headers, string name) =>
+            headers.TryGetValues(name, out var vals) && long.TryParse(vals.FirstOrDefault(), out var n) ? n : null;
+
+        static bool ParseBool(System.Net.Http.Headers.HttpResponseHeaders headers, string name) =>
+            headers.TryGetValues(name, out var vals) && vals.FirstOrDefault() is "true";
+
+        return new SecretStatus
+        {
+            ReadCount = ParseNullableInt(response.Headers, "X-Sirr-Read-Count") ?? 0,
+            ReadsRemaining = ParseNullableInt(response.Headers, "X-Sirr-Reads-Remaining"),
+            Delete = ParseBool(response.Headers, "X-Sirr-Delete"),
+            CreatedAt = ParseNullableLong(response.Headers, "X-Sirr-Created-At") ?? 0,
+            ExpiresAt = ParseNullableLong(response.Headers, "X-Sirr-Expires-At"),
+            IsSealed = isSealed,
+        };
     }
 
     /// <inheritdoc />
@@ -285,17 +322,17 @@ public sealed class SirrClient : ISirrClient, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<MeResponse> UpdateMeAsync(string? name = null, string? email = null, CancellationToken ct = default)
+    public async Task<MeResponse> UpdateMeAsync(Dictionary<string, string> metadata, CancellationToken ct = default)
     {
-        var payload = new UpdateMeRequest { Name = name, Email = email };
+        var payload = new UpdateMeRequest { Metadata = metadata };
         return await SendAsync<MeResponse>(HttpMethod.Patch, "/me", payload, ct)
             .ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public async Task<KeyCreateResult> CreateMeKeyAsync(string name, long? validForSeconds = null, CancellationToken ct = default)
+    public async Task<KeyCreateResult> CreateMeKeyAsync(string name, long? validForSeconds = null, long? validBefore = null, CancellationToken ct = default)
     {
-        var payload = new CreateMeKeyRequest { Name = name, ValidForSeconds = validForSeconds };
+        var payload = new CreateMeKeyRequest { Name = name, ValidForSeconds = validForSeconds, ValidBefore = validBefore };
         return await SendAsync<KeyCreateResult>(HttpMethod.Post, "/me/keys", payload, ct)
             .ConfigureAwait(false);
     }
@@ -318,9 +355,9 @@ public sealed class SirrClient : ISirrClient, IDisposable
     // --- Admin: Orgs ---
 
     /// <inheritdoc />
-    public async Task<OrgResponse> CreateOrgAsync(string name, CancellationToken ct = default)
+    public async Task<OrgResponse> CreateOrgAsync(string name, Dictionary<string, string>? metadata = null, CancellationToken ct = default)
     {
-        var payload = new CreateOrgRequest { Name = name };
+        var payload = new CreateOrgRequest { Name = name, Metadata = metadata };
         return await SendAsync<OrgResponse>(HttpMethod.Post, "/orgs", payload, ct)
             .ConfigureAwait(false);
     }
@@ -351,9 +388,9 @@ public sealed class SirrClient : ISirrClient, IDisposable
     // --- Admin: Principals ---
 
     /// <inheritdoc />
-    public async Task<PrincipalResponse> CreatePrincipalAsync(string orgId, string role, string name, CancellationToken ct = default)
+    public async Task<PrincipalResponse> CreatePrincipalAsync(string orgId, string role, string name, Dictionary<string, string>? metadata = null, CancellationToken ct = default)
     {
-        var payload = new CreatePrincipalRequest { Role = role, Name = name };
+        var payload = new CreatePrincipalRequest { Role = role, Name = name, Metadata = metadata };
         return await SendAsync<PrincipalResponse>(HttpMethod.Post,
             $"/orgs/{Uri.EscapeDataString(orgId)}/principals", payload, ct)
             .ConfigureAwait(false);
@@ -387,7 +424,7 @@ public sealed class SirrClient : ISirrClient, IDisposable
     // --- Admin: Roles ---
 
     /// <inheritdoc />
-    public async Task<RoleResponse> CreateRoleAsync(string orgId, string name, string[] permissions, CancellationToken ct = default)
+    public async Task<RoleResponse> CreateRoleAsync(string orgId, string name, string permissions, CancellationToken ct = default)
     {
         var payload = new CreateRoleRequest { Name = name, Permissions = permissions };
         return await SendAsync<RoleResponse>(HttpMethod.Post,

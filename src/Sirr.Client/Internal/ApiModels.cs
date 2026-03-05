@@ -21,6 +21,14 @@ internal sealed class CreateSecretRequest
     [JsonPropertyName("delete")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Delete { get; init; }
+
+    [JsonPropertyName("webhook_url")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WebhookUrl { get; init; }
+
+    [JsonPropertyName("allowed_keys")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string[]? AllowedKeys { get; init; }
 }
 
 internal sealed class CreateSecretResponse
@@ -98,13 +106,8 @@ internal sealed class DeletedResponse
 
 internal sealed class UpdateMeRequest
 {
-    [JsonPropertyName("name")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Name { get; init; }
-
-    [JsonPropertyName("email")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Email { get; init; }
+    [JsonPropertyName("metadata")]
+    public required Dictionary<string, string> Metadata { get; init; }
 }
 
 internal sealed class CreateMeKeyRequest
@@ -115,12 +118,20 @@ internal sealed class CreateMeKeyRequest
     [JsonPropertyName("valid_for_seconds")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? ValidForSeconds { get; init; }
+
+    [JsonPropertyName("valid_before")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ValidBefore { get; init; }
 }
 
 internal sealed class CreateOrgRequest
 {
     [JsonPropertyName("name")]
     public required string Name { get; init; }
+
+    [JsonPropertyName("metadata")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? Metadata { get; init; }
 }
 
 internal sealed class ListOrgsResponse
@@ -136,6 +147,10 @@ internal sealed class CreatePrincipalRequest
 
     [JsonPropertyName("role")]
     public required string Role { get; init; }
+
+    [JsonPropertyName("metadata")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? Metadata { get; init; }
 }
 
 internal sealed class ListPrincipalsResponse
@@ -149,8 +164,9 @@ internal sealed class CreateRoleRequest
     [JsonPropertyName("name")]
     public required string Name { get; init; }
 
+    /// <summary>Permission letter string e.g. "CWRD".</summary>
     [JsonPropertyName("permissions")]
-    public required string[] Permissions { get; init; }
+    public required string Permissions { get; init; }
 }
 
 internal sealed class ListRolesResponse
@@ -161,6 +177,10 @@ internal sealed class ListRolesResponse
 
 internal sealed class PatchSecretRequest
 {
+    [JsonPropertyName("value")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Value { get; init; }
+
     [JsonPropertyName("ttl_seconds")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? TtlSeconds { get; init; }

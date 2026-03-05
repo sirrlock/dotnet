@@ -3,7 +3,7 @@
   <PropertyGroup>
     <PackageId>Sirr.Client</PackageId>
     <TargetFramework>net8.0</TargetFramework>
-    <Version>0.1.0</Version>
+    <Version>1.0.0</Version>
     <Authors>sirrlock</Authors>
     <Description>Ephemeral secrets for .NET applications. Async HTTP client for the Sirr API.</Description>
     <PackageTags>secrets;vault;ephemeral;sirr;security</PackageTags>

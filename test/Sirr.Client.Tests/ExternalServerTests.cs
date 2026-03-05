@@ -117,6 +117,36 @@ public class ExternalServerTests(ITestOutputHelper output)
         output.WriteLine("BurnAfterRead: second read correctly returned null");
     }
 
+    // --- HEAD: check without consuming a read ---
+
+    [Fact]
+    public async Task Public_HeadDoesNotConsumeRead()
+    {
+        if (!Enabled) return;
+
+        using var client = MasterClient();
+        const string key = "EXT_HEAD";
+
+        await client.PushAsync(key, "head-value", reads: 1, ttl: TimeSpan.FromMinutes(5));
+
+        // HEAD should not consume the read
+        var status = await client.HeadAsync(key);
+        Assert.NotNull(status);
+        Assert.False(status!.IsSealed);
+        Assert.Equal(0, status.ReadCount);
+        output.WriteLine($"HeadAsync: read_count={status.ReadCount} reads_remaining={status.ReadsRemaining}");
+
+        // GET should still succeed (read counter was not spent by HEAD)
+        var value = await client.GetAsync(key);
+        Assert.Equal("head-value", value);
+        output.WriteLine("GetAsync after HeadAsync: still returned value (read not consumed by HEAD)");
+
+        // Second GET should return null (budget exhausted)
+        var second = await client.GetAsync(key);
+        Assert.Null(second);
+        output.WriteLine("Second GetAsync: null (budget exhausted as expected)");
+    }
+
     // --- Admin: Org lifecycle ---
 
     [Fact]
@@ -138,6 +168,45 @@ public class ExternalServerTests(ITestOutputHelper output)
             var orgs = await client.ListOrgsAsync();
             Assert.Contains(orgs, o => o.Id == org.Id);
             output.WriteLine($"ListOrgsAsync: found {orgName}");
+        }
+        finally
+        {
+            if (org is not null)
+            {
+                var del = await client.DeleteOrgAsync(org.Id);
+                output.WriteLine($"DeleteOrgAsync({org.Id}): {del}");
+            }
+        }
+    }
+
+    // --- Admin: Role lifecycle ---
+
+    [Fact]
+    public async Task Admin_CreateAndDeleteRole()
+    {
+        if (!Enabled) return;
+
+        using var client = MasterClient();
+        OrgResponse? org = null;
+
+        try
+        {
+            org = await client.CreateOrgAsync("dotnet-role-test-org");
+            output.WriteLine($"Created org: {org.Id}");
+
+            var role = await client.CreateRoleAsync(org.Id, "dotnet-viewer", "R");
+            output.WriteLine($"CreateRoleAsync: name={role.Name} permissions={role.Permissions} org_id={role.OrgId}");
+            Assert.Equal("dotnet-viewer", role.Name);
+            Assert.Equal("R", role.Permissions);
+            Assert.Equal(org.Id, role.OrgId);
+
+            var roles = await client.ListRolesAsync(org.Id);
+            Assert.Contains(roles, r => r.Name == "dotnet-viewer");
+            output.WriteLine($"ListRolesAsync: found dotnet-viewer");
+
+            var deleted = await client.DeleteRoleAsync(org.Id, "dotnet-viewer");
+            Assert.True(deleted);
+            output.WriteLine($"DeleteRoleAsync: {deleted}");
         }
         finally
         {

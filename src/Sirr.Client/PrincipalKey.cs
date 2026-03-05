@@ -1,13 +1,13 @@
-#pragma warning disable CS1591
+#pragma warning disable CS1591 // Record properties are self-documenting via JsonPropertyName
 using System.Text.Json.Serialization;
 
 namespace Sirr;
 
 /// <summary>
-/// Result of creating a personal API key via POST /me/keys.
-/// The raw <see cref="Key"/> value is shown only once — store it immediately.
+/// A personal API key belonging to the authenticated principal (returned by GET /me).
+/// The raw key value is only available at creation time via <see cref="KeyCreateResult"/>.
 /// </summary>
-public sealed record KeyCreateResult
+public sealed record PrincipalKey
 {
     [JsonPropertyName("id")]
     public required string Id { get; init; }
@@ -15,13 +15,12 @@ public sealed record KeyCreateResult
     [JsonPropertyName("name")]
     public required string Name { get; init; }
 
-    /// <summary>The raw API key — only returned at creation time.</summary>
-    [JsonPropertyName("key")]
-    public required string Key { get; init; }
-
     [JsonPropertyName("valid_after")]
     public long ValidAfter { get; init; }
 
     [JsonPropertyName("valid_before")]
     public long ValidBefore { get; init; }
+
+    [JsonPropertyName("created_at")]
+    public long CreatedAt { get; init; }
 }

@@ -1,4 +1,4 @@
-#pragma warning disable CS1591 // Record properties are self-documenting via JsonPropertyName
+#pragma warning disable CS1591
 using System.Text.Json.Serialization;
 
 namespace Sirr;
@@ -11,17 +11,17 @@ public sealed record PrincipalResponse
     [JsonPropertyName("id")]
     public required string Id { get; init; }
 
-    [JsonPropertyName("email")]
-    public string? Email { get; init; }
-
     [JsonPropertyName("name")]
     public string? Name { get; init; }
 
     [JsonPropertyName("role")]
     public required string Role { get; init; }
 
-    [JsonPropertyName("org")]
-    public string? Org { get; init; }
+    [JsonPropertyName("org_id")]
+    public string? OrgId { get; init; }
+
+    [JsonPropertyName("metadata")]
+    public IReadOnlyDictionary<string, string>? Metadata { get; init; }
 
     [JsonPropertyName("created_at")]
     public long CreatedAt { get; init; }

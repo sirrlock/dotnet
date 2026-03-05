@@ -1,4 +1,4 @@
-#pragma warning disable CS1591 // Record properties are self-documenting via JsonPropertyName
+#pragma warning disable CS1591
 using System.Text.Json.Serialization;
 
 namespace Sirr;
@@ -28,4 +28,10 @@ public sealed record AuditEvent
 
     [JsonPropertyName("detail")]
     public string? Detail { get; init; }
+
+    [JsonPropertyName("org_id")]
+    public string? OrgId { get; init; }
+
+    [JsonPropertyName("principal_id")]
+    public string? PrincipalId { get; init; }
 }

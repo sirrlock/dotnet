@@ -7,7 +7,6 @@ namespace Sirr.Tests;
 public sealed class SirrClientTests
 {
     private static readonly string[] AllEvents = ["*"];
-    private static readonly string[] ReadPermission = ["read"];
 
     private static (SirrClient Client, MockHttpHandler Handler) CreateClient()
     {
@@ -162,6 +161,142 @@ public sealed class SirrClientTests
         await client.PatchAsync("K", ttl: TimeSpan.FromHours(1));
 
         Assert.Equal("/orgs/acme/secrets/K", handler.Requests[0].RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task PatchAsync_SendsValue()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueOk(new { key = "K" });
+
+        await client.PatchAsync("K", value: "new-value");
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        Assert.Equal("new-value", doc.RootElement.GetProperty("value").GetString());
+    }
+
+    // --- Head ---
+
+    [Fact]
+    public async Task HeadAsync_ReturnsStatus_On200()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueHead(System.Net.HttpStatusCode.OK, new()
+        {
+            ["X-Sirr-Read-Count"] = "2",
+            ["X-Sirr-Reads-Remaining"] = "3",
+            ["X-Sirr-Delete"] = "true",
+            ["X-Sirr-Created-At"] = "1700000000",
+            ["X-Sirr-Expires-At"] = "1700086400",
+        });
+
+        var status = await client.HeadAsync("K");
+
+        Assert.NotNull(status);
+        Assert.Equal(2, status!.ReadCount);
+        Assert.Equal(3, status.ReadsRemaining);
+        Assert.True(status.Delete);
+        Assert.Equal(1700000000L, status.CreatedAt);
+        Assert.Equal(1700086400L, status.ExpiresAt);
+        Assert.False(status.IsSealed);
+        var req = handler.Requests[0];
+        Assert.Equal(HttpMethod.Head, req.Method);
+        Assert.Equal("/secrets/K", req.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task HeadAsync_ReturnsNull_On404()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueHead(System.Net.HttpStatusCode.NotFound, new());
+
+        var status = await client.HeadAsync("missing");
+
+        Assert.Null(status);
+    }
+
+    [Fact]
+    public async Task HeadAsync_ReturnsSealed_On410()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueHead(System.Net.HttpStatusCode.Gone, new()
+        {
+            ["X-Sirr-Read-Count"] = "5",
+            ["X-Sirr-Delete"] = "false",
+        });
+
+        var status = await client.HeadAsync("K");
+
+        Assert.NotNull(status);
+        Assert.True(status!.IsSealed);
+        Assert.Equal(5, status.ReadCount);
+        Assert.False(status.Delete);
+    }
+
+    [Fact]
+    public async Task HeadAsync_ReadsRemainingIsNull_WhenHeaderAbsent()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueHead(System.Net.HttpStatusCode.OK, new()
+        {
+            ["X-Sirr-Read-Count"] = "0",
+        });
+
+        var status = await client.HeadAsync("K");
+
+        Assert.NotNull(status);
+        Assert.Null(status!.ReadsRemaining);
+    }
+
+    [Fact]
+    public async Task PushAsync_SendsAllowedKeys()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueOk(new { key = "K" });
+
+        await client.PushAsync("K", "V", allowedKeys: ["key-1", "key-2"]);
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        var arr = doc.RootElement.GetProperty("allowed_keys");
+        Assert.Equal(JsonValueKind.Array, arr.ValueKind);
+        Assert.Equal("key-1", arr[0].GetString());
+        Assert.Equal("key-2", arr[1].GetString());
+    }
+
+    [Fact]
+    public async Task PushAsync_OmitsAllowedKeys_WhenNull()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueOk(new { key = "K" });
+
+        await client.PushAsync("K", "V");
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        Assert.False(doc.RootElement.TryGetProperty("allowed_keys", out _));
+    }
+
+    [Fact]
+    public async Task PushAsync_SendsWebhookUrl()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueOk(new { key = "K" });
+
+        await client.PushAsync("K", "V", webhookUrl: "https://hooks.example.com/sirr");
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        Assert.Equal("https://hooks.example.com/sirr", doc.RootElement.GetProperty("webhook_url").GetString());
+    }
+
+    [Fact]
+    public async Task PushAsync_OmitsWebhookUrl_WhenNull()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueOk(new { key = "K" });
+
+        await client.PushAsync("K", "V");
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        Assert.False(doc.RootElement.TryGetProperty("webhook_url", out _));
     }
 
     // --- Get ---
@@ -604,49 +739,92 @@ public sealed class SirrClientTests
     public async Task GetMeAsync_ReturnsProfile()
     {
         var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { id = "usr_1", email = "a@b.com", name = "Alice", role = "admin", org = "acme", created_at = 1000L });
+        handler.EnqueueOk(new { id = "usr_1", name = "Alice", role = "admin", org_id = "acme", created_at = 1000L });
 
         var result = await client.GetMeAsync();
 
         Assert.Equal("usr_1", result.Id);
-        Assert.Equal("a@b.com", result.Email);
         Assert.Equal("Alice", result.Name);
         Assert.Equal("admin", result.Role);
-        Assert.Equal("acme", result.Org);
+        Assert.Equal("acme", result.OrgId);
         Assert.Equal("/me", handler.Requests[0].RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task GetMeAsync_DeserializesKeys()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueOk(new
+        {
+            id = "usr_1",
+            name = "Alice",
+            role = "admin",
+            org_id = "acme",
+            created_at = 1000L,
+            keys = new[]
+            {
+                new { id = "key_1", name = "ci-key", valid_after = 1000L, valid_before = 9999L, created_at = 1000L },
+            }
+        });
+
+        var result = await client.GetMeAsync();
+
+        Assert.NotNull(result.Keys);
+        Assert.Single(result.Keys!);
+        Assert.Equal("key_1", result.Keys![0].Id);
+        Assert.Equal("ci-key", result.Keys![0].Name);
+        Assert.Equal(9999L, result.Keys![0].ValidBefore);
     }
 
     [Fact]
     public async Task UpdateMeAsync_SendsPatchRequest()
     {
         var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { id = "usr_1", name = "Bob", created_at = 1000L });
+        // PATCH /me returns id, name, role, org_id, metadata — no created_at or keys
+        handler.EnqueueOk(new { id = "usr_1", name = "Bob", role = "admin", org_id = "acme", metadata = new { team = "platform" } });
 
-        var result = await client.UpdateMeAsync(name: "Bob");
+        var result = await client.UpdateMeAsync(new Dictionary<string, string> { ["team"] = "platform" });
 
         Assert.Equal(HttpMethod.Patch, handler.Requests[0].Method);
         Assert.Equal("/me", handler.Requests[0].RequestUri!.AbsolutePath);
+        Assert.Equal("usr_1", result.Id);
+        Assert.Equal(0L, result.CreatedAt); // not returned by PATCH
 
         using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
-        Assert.Equal("Bob", doc.RootElement.GetProperty("name").GetString());
+        Assert.Equal("platform", doc.RootElement.GetProperty("metadata").GetProperty("team").GetString());
     }
 
     [Fact]
     public async Task CreateMeKeyAsync_ReturnsKeyResult()
     {
         var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { id = "key_1", key = "sirr_me_abc" });
+        handler.EnqueueOk(new { id = "key_1", name = "my-key", key = "sirr_key_abc", valid_after = 1000L, valid_before = 4600L });
 
         var result = await client.CreateMeKeyAsync("my-key", validForSeconds: 3600);
 
         Assert.Equal("key_1", result.Id);
-        Assert.Equal("sirr_me_abc", result.Key);
+        Assert.Equal("my-key", result.Name);
+        Assert.Equal("sirr_key_abc", result.Key);
+        Assert.Equal(4600L, result.ValidBefore);
         Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
         Assert.Equal("/me/keys", handler.Requests[0].RequestUri!.AbsolutePath);
 
         using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
         Assert.Equal("my-key", doc.RootElement.GetProperty("name").GetString());
         Assert.Equal(3600, doc.RootElement.GetProperty("valid_for_seconds").GetInt64());
+    }
+
+    [Fact]
+    public async Task CreateMeKeyAsync_SendsValidBefore()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueOk(new { id = "key_1", name = "k", key = "sirr_abc", valid_after = 1000L, valid_before = 9999L });
+
+        await client.CreateMeKeyAsync("k", validBefore: 9999L);
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        Assert.Equal(9999L, doc.RootElement.GetProperty("valid_before").GetInt64());
+        Assert.False(doc.RootElement.TryGetProperty("valid_for_seconds", out _));
     }
 
     [Fact]
@@ -674,7 +852,8 @@ public sealed class SirrClientTests
     public async Task CreateOrgAsync_ReturnsOrg()
     {
         var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { id = "org_1", name = "Acme", created_at = 1000L });
+        // POST /orgs returns {id, name} — no created_at, no metadata
+        handler.EnqueueOk(new { id = "org_1", name = "Acme" });
 
         var result = await client.CreateOrgAsync("Acme");
 
@@ -685,6 +864,18 @@ public sealed class SirrClientTests
     }
 
     [Fact]
+    public async Task CreateOrgAsync_SendsMetadata()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueOk(new { id = "org_1", name = "Acme" });
+
+        await client.CreateOrgAsync("Acme", metadata: new Dictionary<string, string> { ["env"] = "prod" });
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        Assert.Equal("prod", doc.RootElement.GetProperty("metadata").GetProperty("env").GetString());
+    }
+
+    [Fact]
     public async Task ListOrgsAsync_ReturnsOrgs()
     {
         var (client, handler) = CreateClient();
@@ -692,7 +883,7 @@ public sealed class SirrClientTests
         {
             orgs = new[]
             {
-                new { id = "org_1", name = "Acme", created_at = 1000L },
+                new { id = "org_1", name = "Acme", created_at = 1000L, metadata = new { env = "prod" } },
             }
         });
 
@@ -700,6 +891,8 @@ public sealed class SirrClientTests
 
         Assert.Single(result);
         Assert.Equal("org_1", result[0].Id);
+        Assert.Equal(1000L, result[0].CreatedAt);
+        Assert.Equal("prod", result[0].Metadata?["env"]);
         Assert.Equal("/orgs", handler.Requests[0].RequestUri!.AbsolutePath);
     }
 
@@ -728,18 +921,33 @@ public sealed class SirrClientTests
     public async Task CreatePrincipalAsync_ReturnsPrincipal()
     {
         var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { id = "usr_1", name = "Alice", role = "member", org = "org_1", created_at = 1000L });
+        // POST /orgs/{id}/principals returns {id, name, role, org_id}
+        handler.EnqueueOk(new { id = "usr_1", name = "Alice", role = "member", org_id = "org_1" });
 
         var result = await client.CreatePrincipalAsync("org_1", "member", "Alice");
 
         Assert.Equal("usr_1", result.Id);
         Assert.Equal("member", result.Role);
+        Assert.Equal("org_1", result.OrgId);
         Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
         Assert.Equal("/orgs/org_1/principals", handler.Requests[0].RequestUri!.AbsolutePath);
 
         using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
         Assert.Equal("Alice", doc.RootElement.GetProperty("name").GetString());
         Assert.Equal("member", doc.RootElement.GetProperty("role").GetString());
+        Assert.False(doc.RootElement.TryGetProperty("metadata", out _)); // omitted when null
+    }
+
+    [Fact]
+    public async Task CreatePrincipalAsync_SendsMetadata()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueOk(new { id = "usr_1", name = "Alice", role = "member", org_id = "org_1" });
+
+        await client.CreatePrincipalAsync("org_1", "member", "Alice", metadata: new Dictionary<string, string> { ["team"] = "sre" });
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        Assert.Equal("sre", doc.RootElement.GetProperty("metadata").GetProperty("team").GetString());
     }
 
     [Fact]
@@ -750,7 +958,7 @@ public sealed class SirrClientTests
         {
             principals = new[]
             {
-                new { id = "usr_1", name = "Alice", role = "admin", created_at = 1000L },
+                new { id = "usr_1", name = "Alice", role = "admin", org_id = "org_1", created_at = 1000L, metadata = new { team = "sre" } },
             }
         });
 
@@ -758,6 +966,8 @@ public sealed class SirrClientTests
 
         Assert.Single(result);
         Assert.Equal("usr_1", result[0].Id);
+        Assert.Equal("org_1", result[0].OrgId);
+        Assert.Equal("sre", result[0].Metadata?["team"]);
         Assert.Equal("/orgs/org_1/principals", handler.Requests[0].RequestUri!.AbsolutePath);
     }
 
@@ -786,14 +996,19 @@ public sealed class SirrClientTests
     public async Task CreateRoleAsync_ReturnsRole()
     {
         var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { id = "role_1", name = "viewer", permissions = ReadPermission, created_at = 1000L });
+        handler.EnqueueOk(new { name = "viewer", permissions = "R", org_id = "org_1" });
 
-        var result = await client.CreateRoleAsync("org_1", "viewer", ReadPermission);
+        var result = await client.CreateRoleAsync("org_1", "viewer", "R");
 
-        Assert.Equal("role_1", result.Id);
         Assert.Equal("viewer", result.Name);
+        Assert.Equal("R", result.Permissions);
+        Assert.Equal("org_1", result.OrgId);
         Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
         Assert.Equal("/orgs/org_1/roles", handler.Requests[0].RequestUri!.AbsolutePath);
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        Assert.Equal("viewer", doc.RootElement.GetProperty("name").GetString());
+        Assert.Equal("R", doc.RootElement.GetProperty("permissions").GetString());
     }
 
     [Fact]
@@ -804,14 +1019,18 @@ public sealed class SirrClientTests
         {
             roles = new[]
             {
-                new { id = "role_1", name = "viewer", permissions = ReadPermission, created_at = 1000L },
+                new { name = "viewer", permissions = "R", org_id = "org_1", built_in = false, created_at = 1000L },
+                new { name = "admin", permissions = "CWRDS", org_id = "", built_in = true, created_at = 0L },
             }
         });
 
         var result = await client.ListRolesAsync("org_1");
 
-        Assert.Single(result);
-        Assert.Equal("role_1", result[0].Id);
+        Assert.Equal(2, result.Count);
+        Assert.Equal("viewer", result[0].Name);
+        Assert.Equal("R", result[0].Permissions);
+        Assert.False(result[0].BuiltIn);
+        Assert.True(result[1].BuiltIn);
         Assert.Equal("/orgs/org_1/roles", handler.Requests[0].RequestUri!.AbsolutePath);
     }
 
