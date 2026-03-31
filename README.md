@@ -23,7 +23,7 @@ Sirr provides a different abstraction: **credentials that self-destruct after th
 ```csharp
 // Push a public dead drop — returns { Id, Url }
 var drop = await sirr.PushAsync("sk-...", reads: 1, ttl: TimeSpan.FromMinutes(30));
-Console.WriteLine(drop.Url); // → https://sirrlock.com/s/abc123
+Console.WriteLine(drop.Url); // → https://sirr.sirrlock.com/s/abc123
 
 // Set an org-scoped named secret — throws SecretExistsException on 409
 await sirr.SetAsync("COSMOS_URL", connectionString, org: "acme", reads: 1, ttl: TimeSpan.FromMinutes(30));
@@ -52,13 +52,13 @@ using Sirr;
 
 var sirr = new SirrClient(new SirrOptions
 {
-    Server = Environment.GetEnvironmentVariable("SIRR_SERVER") ?? "https://sirrlock.com",
+    Server = Environment.GetEnvironmentVariable("SIRR_SERVER") ?? "https://sirr.sirrlock.com",
     Token  = Environment.GetEnvironmentVariable("SIRR_TOKEN")!,
 });
 
 // Push a public dead drop — returns PushResult { Id, Url }
 var drop = await sirr.PushAsync("sk-...", ttl: TimeSpan.FromHours(1), reads: 1);
-Console.WriteLine(drop.Url); // → https://sirrlock.com/s/abc123
+Console.WriteLine(drop.Url); // → https://sirr.sirrlock.com/s/abc123
 
 // Set an org-scoped named secret — throws SecretExistsException on 409
 await sirr.SetAsync("API_KEY", "sk-...", org: "acme", ttl: TimeSpan.FromHours(1), reads: 1);
@@ -199,7 +199,7 @@ var value = await sirr.GetAsync("DB_URL", org: "acme");
 // Audit, list, and webhook calls still support org at the client level
 var sirr = new SirrClient(new SirrOptions
 {
-    Server = "https://sirrlock.com",
+    Server = "https://sirr.sirrlock.com",
     Token  = Environment.GetEnvironmentVariable("SIRR_TOKEN")!,
     Org    = "acme",
 });
@@ -262,7 +262,8 @@ IReadOnlyList<PrincipalResponse> principals = await sirr.ListPrincipalsAsync(org
 await sirr.DeletePrincipalAsync(org.Id, principal.Id);
 
 // --- Roles ---
-// permissions is a letter string: C=Create W=Write R=Read D=Delete S=Seal
+// permissions is a letter string: r=read-own R=read-org l=list-own L=list-org c=create C=create-on-behalf
+// p=patch-own P=patch-org a=account-read A=account-read-org m=account-manage M=manage-org S=sirr-admin d=delete-own D=delete-org
 RoleResponse role = await sirr.CreateRoleAsync(org.Id, "viewer", permissions: "R");
 IReadOnlyList<RoleResponse> roles = await sirr.ListRolesAsync(org.Id);
 await sirr.DeleteRoleAsync(org.Id, role.Name);
