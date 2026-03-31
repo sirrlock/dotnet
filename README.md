@@ -21,12 +21,16 @@
 Sirr provides a different abstraction: **credentials that self-destruct after the agent is done.** You define the maximum lifetime and read budget. The server enforces it. You don't need to schedule cleanup jobs or remember to revoke.
 
 ```csharp
-// Give the agent exactly 1 read of the connection string — 30-minute window
-await sirr.PushAsync("COSMOS_URL", connectionString, reads: 1, ttl: TimeSpan.FromMinutes(30));
+// Push a public dead drop — returns { Id, Url }
+var drop = await sirr.PushAsync("sk-...", reads: 1, ttl: TimeSpan.FromMinutes(30));
+Console.WriteLine(drop.Url); // → https://sirrlock.com/s/abc123
 
-// Agent reads it → read counter hits 1 → record deleted
-var url = await sirr.GetAsync("COSMOS_URL");  // returns value
-url = await sirr.GetAsync("COSMOS_URL");      // returns null — burned
+// Set an org-scoped named secret — throws SecretExistsException on 409
+await sirr.SetAsync("COSMOS_URL", connectionString, org: "acme", reads: 1, ttl: TimeSpan.FromMinutes(30));
+
+// Get by ID (dead drop) or by key (org-scoped)
+var value = await sirr.GetAsync(drop.Id);                          // dead drop
+var connStr = await sirr.GetAsync("COSMOS_URL", org: "acme");     // org-scoped
 ```
 
 ---
@@ -48,34 +52,40 @@ using Sirr;
 
 var sirr = new SirrClient(new SirrOptions
 {
-    Server = Environment.GetEnvironmentVariable("SIRR_SERVER") ?? "http://localhost:39999",
+    Server = Environment.GetEnvironmentVariable("SIRR_SERVER") ?? "https://sirrlock.com",
     Token  = Environment.GetEnvironmentVariable("SIRR_TOKEN")!,
 });
 
-// Push a one-time secret
-await sirr.PushAsync("API_KEY", "sk-...", ttl: TimeSpan.FromHours(1), reads: 1);
+// Push a public dead drop — returns PushResult { Id, Url }
+var drop = await sirr.PushAsync("sk-...", ttl: TimeSpan.FromHours(1), reads: 1);
+Console.WriteLine(drop.Url); // → https://sirrlock.com/s/abc123
 
-// Push with a webhook notification on read/burn
-await sirr.PushAsync("API_KEY", "sk-...", reads: 1, webhookUrl: "https://hooks.example.com/sirr");
+// Set an org-scoped named secret — throws SecretExistsException on 409
+await sirr.SetAsync("API_KEY", "sk-...", org: "acme", ttl: TimeSpan.FromHours(1), reads: 1);
 
-// Push in seal mode — secret blocks after reads exhausted, refreshable via PatchAsync
-await sirr.PushAsync("RENEWABLE", "value", reads: 5, sealOnExpiry: true);
+// Set with a webhook notification on read/burn
+await sirr.SetAsync("API_KEY", "sk-...", org: "acme", reads: 1, webhookUrl: "https://hooks.example.com/sirr");
 
-// Push with access restricted to specific API key IDs (org-scoped only)
-await sirr.PushAsync("TEAM_SECRET", "value", allowedKeys: ["key_abc123", "key_def456"]);
+// Handle conflicts
+try
+{
+    await sirr.SetAsync("API_KEY", "sk-new...", org: "acme");
+}
+catch (SecretExistsException)
+{
+    // 409 — key already exists in this org, delete first or use a different key
+}
 
 // Check existence without consuming a read
 SecretStatus? status = await sirr.HeadAsync("API_KEY");
 // status?.ReadCount, status?.ReadsRemaining, status?.IsSealed, status?.ExpiresAt
 
-// Retrieve — null if burned or expired
-string? value = await sirr.GetAsync("API_KEY");
+// Retrieve — routes by org presence; null if burned or expired
+string? value = await sirr.GetAsync(drop.Id);                         // dead drop by ID
+string? orgValue = await sirr.GetAsync("API_KEY", org: "acme");      // org-scoped by key
 
 // Pull all into a dictionary
 IDictionary<string, string> secrets = await sirr.PullAllAsync();
-
-// Update value, TTL, or read budget on a seal-mode secret (resets read counter)
-await sirr.PatchAsync("RENEWABLE", value: "new-value", ttl: TimeSpan.FromHours(2), reads: 5);
 
 // Delete immediately
 await sirr.DeleteAsync("API_KEY");
@@ -134,12 +144,12 @@ public class DatabasePlugin(ISirrClient sirr)
 ### Azure OpenAI agent with burn-after-use API key
 
 ```csharp
-// Push a time-limited key before starting the agent session
-await sirr.PushAsync("AOAI_KEY", openAiKey, reads: 1, ttl: TimeSpan.FromMinutes(60));
+// Set a time-limited key before starting the agent session
+await sirr.SetAsync("AOAI_KEY", openAiKey, org: "acme", reads: 1, ttl: TimeSpan.FromMinutes(60));
 
 var client = new AzureOpenAIClient(
     new Uri(endpoint),
-    new AzureKeyCredential(await sirr.GetAsync("AOAI_KEY") ?? throw new Exception("Key expired"))
+    new AzureKeyCredential(await sirr.GetAsync("AOAI_KEY", org: "acme") ?? throw new Exception("Key expired"))
 );
 
 // Key was consumed on GetAsync — it no longer exists in Sirr
@@ -162,12 +172,12 @@ public class DataIngestionService(ISirrClient sirr) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        // Push a credential valid for 5 reads — retry-safe
-        await sirr.PushAsync("SOURCE_API_KEY", apiKey, reads: 5, ttl: TimeSpan.FromHours(2));
+        // Set an org-scoped credential valid for 5 reads — retry-safe
+        await sirr.SetAsync("SOURCE_API_KEY", apiKey, org: "acme", reads: 5, ttl: TimeSpan.FromHours(2));
 
         for (int i = 0; i < 5; i++)
         {
-            var key = await sirr.GetAsync("SOURCE_API_KEY", ct);
+            var key = await sirr.GetAsync("SOURCE_API_KEY", org: "acme", ct: ct);
             if (key is null) break; // budget exhausted
             await IngestBatch(key, ct);
         }
@@ -179,18 +189,20 @@ public class DataIngestionService(ISirrClient sirr) : BackgroundService
 
 ## Multi-Tenant / Org Mode
 
-Set `Org` on `SirrOptions` to route all secret, audit, webhook, and prune operations through an org-scoped path (`/orgs/{org}/secrets/...`).
+Org scoping is now per-call via the `org` parameter on `SetAsync()` and `GetAsync()`:
 
 ```csharp
+// Set and get with per-call org
+await sirr.SetAsync("DB_URL", "postgres://...", org: "acme", reads: 3);
+var value = await sirr.GetAsync("DB_URL", org: "acme");
+
+// Audit, list, and webhook calls still support org at the client level
 var sirr = new SirrClient(new SirrOptions
 {
-    Server = "http://localhost:39999",
+    Server = "https://sirrlock.com",
     Token  = Environment.GetEnvironmentVariable("SIRR_TOKEN")!,
     Org    = "acme",
 });
-
-// All calls now hit /orgs/acme/secrets/*, /orgs/acme/audit, etc.
-await sirr.PushAsync("DB_URL", "postgres://...");
 var secrets = await sirr.ListAsync();
 ```
 
