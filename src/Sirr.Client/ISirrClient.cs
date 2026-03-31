@@ -11,14 +11,21 @@ public interface ISirrClient
     Task<bool> HealthAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// Stores a secret with optional TTL and read limit.
-    /// When <paramref name="sealOnExpiry"/> is <c>true</c>, the secret enters seal mode
-    /// (reads return 410 after the read budget is exhausted) and can be updated with
-    /// <see cref="PatchAsync"/>. Defaults to <c>null</c> (server default: burn-after-read).
-    /// Optionally attach a <paramref name="webhookUrl"/> to receive events when the secret is read or burned.
-    /// In org-scoped mode, <paramref name="allowedKeys"/> restricts which principal key IDs may read the secret.
+    /// Stores a value as an anonymous dead-drop secret (public endpoint, no key required).
+    /// The server assigns a random 64-character hex ID returned in <see cref="PushResponse.Id"/>.
+    /// Use <see cref="GetAsync"/> with the returned ID to retrieve the value (one-time by default).
     /// </summary>
-    Task PushAsync(string key, string value, TimeSpan? ttl = null, int? reads = null, bool? sealOnExpiry = null, string? webhookUrl = null, string[]? allowedKeys = null, CancellationToken ct = default);
+    Task<PushResponse> PushAsync(string value, TimeSpan? ttl = null, int? reads = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Stores a named secret in an org (org-scoped endpoint).
+    /// Requires the client to be configured with an org (via <see cref="SirrOptions.Org"/>).
+    /// Returns <see cref="SetResponse"/> with the stored key.
+    /// Throws <see cref="SecretExistsException"/> if the key already exists (HTTP 409).
+    /// Optionally attach a <paramref name="webhookUrl"/> to receive events when the secret is read or burned.
+    /// <paramref name="allowedKeys"/> restricts which principal key IDs may read the secret.
+    /// </summary>
+    Task<SetResponse> SetAsync(string key, string value, TimeSpan? ttl = null, int? reads = null, bool? sealOnExpiry = null, string? webhookUrl = null, string[]? allowedKeys = null, CancellationToken ct = default);
 
     /// <summary>
     /// Updates TTL, read budget, or value of an existing secret.
@@ -37,11 +44,13 @@ public interface ISirrClient
 
     /// <summary>
     /// Retrieves a secret value. Returns <c>null</c> if the secret is burned, expired, or does not exist (404).
+    /// Without an org: routes to <c>GET /secrets/{id}</c> (public dead-drop, <paramref name="idOrKey"/> is the hex ID).
+    /// With an org: routes to <c>GET /orgs/{org}/secrets/{key}</c> (org-scoped named secret).
     /// Throws <see cref="SirrException"/> with status 410 if the secret is sealed (read budget exhausted on a
     /// seal-mode secret) — use <see cref="PatchAsync"/> to reset it, or <see cref="HeadAsync"/> to check status
     /// without consuming a read.
     /// </summary>
-    Task<string?> GetAsync(string key, CancellationToken ct = default);
+    Task<string?> GetAsync(string idOrKey, CancellationToken ct = default);
 
     /// <summary>
     /// Deletes a secret. Returns <c>true</c> if deleted, <c>false</c> if it did not exist.
@@ -72,8 +81,9 @@ public interface ISirrClient
 
     /// <summary>
     /// Queries the audit log with optional filters.
+    /// Pass <paramref name="key"/> to filter events for a specific secret key (org-scoped).
     /// </summary>
-    Task<IReadOnlyList<AuditEvent>> GetAuditLogAsync(long? since = null, long? until = null, string? action = null, int? limit = null, CancellationToken ct = default);
+    Task<IReadOnlyList<AuditEvent>> GetAuditLogAsync(long? since = null, long? until = null, string? action = null, int? limit = null, string? key = null, CancellationToken ct = default);
 
     /// <summary>
     /// Registers a webhook endpoint.

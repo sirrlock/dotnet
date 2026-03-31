@@ -50,9 +50,11 @@ public class IntegrationTests : IClassFixture<SirrdFixture>
     public async Task PublicSecret_AdminCanPushAndGet()
     {
         if (!SirrdFixture.Enabled) return;
-        await _fix.AdminClient.PushAsync("DOTNET_PUBLIC", "hello-public",
+        // Public push returns an ID; retrieve with that ID
+        var pushed = await _fix.AdminClient.PushAsync("hello-public",
             ttl: TimeSpan.FromHours(1));
-        Assert.Equal("hello-public", await _fix.AdminClient.GetAsync("DOTNET_PUBLIC"));
+        Assert.NotEmpty(pushed.Id);
+        Assert.Equal("hello-public", await _fix.AdminClient.GetAsync(pushed.Id));
     }
 
     [Fact]
@@ -60,7 +62,7 @@ public class IntegrationTests : IClassFixture<SirrdFixture>
     {
         if (!SirrdFixture.Enabled) return;
         // OrgAdminClient uses the auto-init bootstrap key (admin principal of bootstrapped org)
-        await _fix.OrgAdminClient.PushAsync("DOTNET_PRIVATE", "secret123",
+        await _fix.OrgAdminClient.SetAsync("DOTNET_PRIVATE", "secret123",
             ttl: TimeSpan.FromHours(1), reads: 10);
         Assert.Equal("secret123", await _fix.OrgAdminClient.GetAsync("DOTNET_PRIVATE"));
     }
@@ -91,7 +93,7 @@ public class IntegrationTests : IClassFixture<SirrdFixture>
     public async Task BurnAfterRead()
     {
         if (!SirrdFixture.Enabled) return;
-        await _fix.OrgAdminClient.PushAsync("DOTNET_BURN", "burnme",
+        await _fix.OrgAdminClient.SetAsync("DOTNET_BURN", "burnme",
             ttl: TimeSpan.FromHours(1), reads: 1);
         Assert.Equal("burnme", await _fix.OrgAdminClient.GetAsync("DOTNET_BURN"));
         Assert.Null(await _fix.OrgAdminClient.GetAsync("DOTNET_BURN"));

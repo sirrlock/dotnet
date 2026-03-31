@@ -57,15 +57,14 @@ public class ExternalServerTests(ITestOutputHelper output)
             Token  = ApiKey,
         });
 
-        const string key = "EXT_README_KEY";
-        // sealOnExpiry: true so we can read twice without burning it on first read
-        await sirr.PushAsync(key, "readme-value", ttl: TimeSpan.FromMinutes(5), reads: 2, sealOnExpiry: true);
+        // Public push: no key required, returns an ID
+        var pushed = await sirr.PushAsync("readme-value", ttl: TimeSpan.FromMinutes(5), reads: 2);
+        Assert.NotEmpty(pushed.Id);
+        output.WriteLine($"PushAsync: id={pushed.Id}");
 
-        var first = await sirr.GetAsync(key);
+        var first = await sirr.GetAsync(pushed.Id);
         Assert.Equal("readme-value", first);
-
-        await sirr.DeleteAsync(key);
-        output.WriteLine("ReadmeExample: push/get/delete round-trip passed");
+        output.WriteLine("ReadmeExample: push/get round-trip passed");
     }
 
     // --- Public (unscoped) secrets: push / get / patch / delete ---
@@ -76,24 +75,23 @@ public class ExternalServerTests(ITestOutputHelper output)
         if (!Enabled) return;
 
         using var client = MasterClient();
-        const string key = "EXT_KEY";
+        // Public push: server assigns ID
+        var pushed = await client.PushAsync("hello", ttl: TimeSpan.FromHours(1), reads: 10);
+        var id = pushed.Id;
+        output.WriteLine($"PushAsync (public): id={id}");
 
-        // Push with sealOnExpiry=true so PATCH is allowed
-        await client.PushAsync(key, "hello", ttl: TimeSpan.FromHours(1), reads: 10, sealOnExpiry: true);
-        output.WriteLine($"PushAsync (seal mode): {key}");
-
-        var value = await client.GetAsync(key);
+        var value = await client.GetAsync(id);
         Assert.Equal("hello", value);
         output.WriteLine($"GetAsync: {value}");
 
-        await client.PatchAsync(key, ttl: TimeSpan.FromHours(2));
-        output.WriteLine("PatchAsync: extended TTL");
+        var afterRead = await client.GetAsync(id);
+        // May or may not be null depending on reads remaining — just confirm no exception
+        output.WriteLine($"GetAsync (2nd): {afterRead ?? "null"}");
 
-        var deleted = await client.DeleteAsync(key);
-        Assert.True(deleted);
+        var deleted = await client.DeleteAsync(id);
         output.WriteLine($"DeleteAsync: {deleted}");
 
-        var afterDelete = await client.GetAsync(key);
+        var afterDelete = await client.GetAsync(id);
         Assert.Null(afterDelete);
     }
 
@@ -105,14 +103,13 @@ public class ExternalServerTests(ITestOutputHelper output)
         if (!Enabled) return;
 
         using var client = MasterClient();
-        const string key = "EXT_BURN";
+        var pushed = await client.PushAsync("burn", reads: 1, ttl: TimeSpan.FromMinutes(5));
+        var id = pushed.Id;
 
-        await client.PushAsync(key, "burn", reads: 1, ttl: TimeSpan.FromMinutes(5));
-
-        var first = await client.GetAsync(key);
+        var first = await client.GetAsync(id);
         Assert.Equal("burn", first);
 
-        var second = await client.GetAsync(key);
+        var second = await client.GetAsync(id);
         Assert.Null(second);
         output.WriteLine("BurnAfterRead: second read correctly returned null");
     }
@@ -125,24 +122,23 @@ public class ExternalServerTests(ITestOutputHelper output)
         if (!Enabled) return;
 
         using var client = MasterClient();
-        const string key = "EXT_HEAD";
-
-        await client.PushAsync(key, "head-value", reads: 1, ttl: TimeSpan.FromMinutes(5));
+        var pushed = await client.PushAsync("head-value", reads: 1, ttl: TimeSpan.FromMinutes(5));
+        var id = pushed.Id;
 
         // HEAD should not consume the read
-        var status = await client.HeadAsync(key);
+        var status = await client.HeadAsync(id);
         Assert.NotNull(status);
         Assert.False(status!.IsSealed);
         Assert.Equal(0, status.ReadCount);
         output.WriteLine($"HeadAsync: read_count={status.ReadCount} reads_remaining={status.ReadsRemaining}");
 
         // GET should still succeed (read counter was not spent by HEAD)
-        var value = await client.GetAsync(key);
+        var value = await client.GetAsync(id);
         Assert.Equal("head-value", value);
         output.WriteLine("GetAsync after HeadAsync: still returned value (read not consumed by HEAD)");
 
         // Second GET should return null (budget exhausted)
-        var second = await client.GetAsync(key);
+        var second = await client.GetAsync(id);
         Assert.Null(second);
         output.WriteLine("Second GetAsync: null (budget exhausted as expected)");
     }

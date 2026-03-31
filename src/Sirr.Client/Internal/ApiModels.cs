@@ -2,7 +2,30 @@ using System.Text.Json.Serialization;
 
 namespace Sirr.Internal;
 
-internal sealed class CreateSecretRequest
+/// <summary>Public dead-drop push: POST /secrets (no key field).</summary>
+internal sealed class PublicPushRequest
+{
+    [JsonPropertyName("value")]
+    public required string Value { get; init; }
+
+    [JsonPropertyName("ttl_seconds")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? TtlSeconds { get; init; }
+
+    [JsonPropertyName("max_reads")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxReads { get; init; }
+}
+
+/// <summary>Public dead-drop push response: {"id": "hex64"}.</summary>
+internal sealed class PublicPushResponse
+{
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+}
+
+/// <summary>Org-scoped set: POST /orgs/{org}/secrets.</summary>
+internal sealed class OrgSetRequest
 {
     [JsonPropertyName("key")]
     public required string Key { get; init; }
@@ -31,7 +54,8 @@ internal sealed class CreateSecretRequest
     public string[]? AllowedKeys { get; init; }
 }
 
-internal sealed class CreateSecretResponse
+/// <summary>Org-scoped set response: {"key": "..."}.</summary>
+internal sealed class OrgSetResponse
 {
     [JsonPropertyName("key")]
     public required string Key { get; init; }
@@ -39,11 +63,26 @@ internal sealed class CreateSecretResponse
 
 internal sealed class GetSecretResponse
 {
+    // Public endpoint returns {"id": "...", "value": "..."}
+    [JsonPropertyName("id")]
+    public string? Id { get; init; }
+
+    // Org endpoint returns {"key": "...", "value": "..."}
     [JsonPropertyName("key")]
-    public required string Key { get; init; }
+    public string? Key { get; init; }
 
     [JsonPropertyName("value")]
     public required string Value { get; init; }
+}
+
+/// <summary>Error response body with optional machine-readable error code.</summary>
+internal sealed class ApiErrorResponse
+{
+    [JsonPropertyName("error")]
+    public string? Error { get; init; }
+
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
 }
 
 internal sealed class ListSecretsResponse
@@ -68,12 +107,6 @@ internal sealed class HealthResponse
 {
     [JsonPropertyName("status")]
     public required string Status { get; init; }
-}
-
-internal sealed class ErrorResponse
-{
-    [JsonPropertyName("error")]
-    public string? Error { get; init; }
 }
 
 internal sealed class AuditEventsResponse

@@ -55,15 +55,15 @@ public sealed class SirrClientTests
         Assert.Equal("/health", request.RequestUri!.AbsolutePath);
     }
 
-    // --- Push ---
+    // --- Push (public dead-drop) ---
 
     [Fact]
     public async Task PushAsync_SendsCorrectRequest()
     {
         var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { key = "DB_URL" });
+        handler.EnqueueOk(new { id = "abcd1234" });
 
-        await client.PushAsync("DB_URL", "postgres://...", ttl: TimeSpan.FromMinutes(30), reads: 5);
+        var result = await client.PushAsync("postgres://...", ttl: TimeSpan.FromMinutes(30), reads: 5);
 
         var request = handler.Requests[0];
         Assert.Equal(HttpMethod.Post, request.Method);
@@ -72,19 +72,21 @@ public sealed class SirrClientTests
         using var doc = JsonDocument.Parse(request.Body!);
         var root = doc.RootElement;
 
-        Assert.Equal("DB_URL", root.GetProperty("key").GetString());
+        // No "key" field — public push is value-only
+        Assert.False(root.TryGetProperty("key", out _));
         Assert.Equal("postgres://...", root.GetProperty("value").GetString());
         Assert.Equal(1800, root.GetProperty("ttl_seconds").GetInt64());
         Assert.Equal(5, root.GetProperty("max_reads").GetInt32());
+        Assert.Equal("abcd1234", result.Id);
     }
 
     [Fact]
     public async Task PushAsync_OmitsNullOptionals()
     {
         var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { key = "K" });
+        handler.EnqueueOk(new { id = "hex64" });
 
-        await client.PushAsync("K", "V");
+        await client.PushAsync("V");
 
         using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
         var root = doc.RootElement;
@@ -97,14 +99,145 @@ public sealed class SirrClientTests
     public async Task PushAsync_IncludesAuthHeader()
     {
         var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { key = "K" });
+        handler.EnqueueOk(new { id = "hex64" });
 
-        await client.PushAsync("K", "V");
+        await client.PushAsync("V");
 
         var auth = handler.Requests[0].Authorization;
         Assert.NotNull(auth);
         Assert.Equal("Bearer", auth!.Scheme);
         Assert.Equal("test-token", auth.Parameter);
+    }
+
+    // --- SetAsync (org-scoped named secret) ---
+
+    [Fact]
+    public async Task SetAsync_SendsCorrectRequest()
+    {
+        var handler = new MockHttpHandler();
+        var client = CreateOrgScopedClient("acme", handler);
+        handler.EnqueueOk(new { key = "DB_URL" });
+
+        var result = await client.SetAsync("DB_URL", "postgres://...", ttl: TimeSpan.FromMinutes(30), reads: 5);
+
+        var request = handler.Requests[0];
+        Assert.Equal(HttpMethod.Post, request.Method);
+        Assert.Equal("/orgs/acme/secrets", request.RequestUri!.AbsolutePath);
+
+        using var doc = JsonDocument.Parse(request.Body!);
+        var root = doc.RootElement;
+
+        Assert.Equal("DB_URL", root.GetProperty("key").GetString());
+        Assert.Equal("postgres://...", root.GetProperty("value").GetString());
+        Assert.Equal(1800, root.GetProperty("ttl_seconds").GetInt64());
+        Assert.Equal(5, root.GetProperty("max_reads").GetInt32());
+        Assert.Equal("DB_URL", result.Key);
+    }
+
+    [Fact]
+    public async Task SetAsync_OmitsNullOptionals()
+    {
+        var handler = new MockHttpHandler();
+        var client = CreateOrgScopedClient("acme", handler);
+        handler.EnqueueOk(new { key = "K" });
+
+        await client.SetAsync("K", "V");
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        var root = doc.RootElement;
+
+        Assert.False(root.TryGetProperty("ttl_seconds", out _));
+        Assert.False(root.TryGetProperty("max_reads", out _));
+    }
+
+    [Fact]
+    public async Task SetAsync_Throws_WhenNoOrg()
+    {
+        var (client, _) = CreateClient();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.SetAsync("K", "V"));
+    }
+
+    [Fact]
+    public async Task SetAsync_ThrowsSecretExistsException_On409()
+    {
+        var handler = new MockHttpHandler();
+        var client = CreateOrgScopedClient("acme", handler);
+        handler.EnqueueError(HttpStatusCode.Conflict, "secret_exists");
+
+        var ex = await Assert.ThrowsAsync<SecretExistsException>(() => client.SetAsync("K", "V"));
+
+        Assert.Equal(409, ex.StatusCode);
+        Assert.Equal("K", ex.Key);
+    }
+
+    [Fact]
+    public async Task SetAsync_SendsAllowedKeys()
+    {
+        var handler = new MockHttpHandler();
+        var client = CreateOrgScopedClient("my-org", handler);
+        handler.EnqueueOk(new { key = "K" });
+
+        await client.SetAsync("K", "V", allowedKeys: ["key-1", "key-2"]);
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        var arr = doc.RootElement.GetProperty("allowed_keys");
+        Assert.Equal(JsonValueKind.Array, arr.ValueKind);
+        Assert.Equal("key-1", arr[0].GetString());
+        Assert.Equal("key-2", arr[1].GetString());
+    }
+
+    [Fact]
+    public async Task SetAsync_OmitsAllowedKeys_WhenNull()
+    {
+        var handler = new MockHttpHandler();
+        var client = CreateOrgScopedClient("acme", handler);
+        handler.EnqueueOk(new { key = "K" });
+
+        await client.SetAsync("K", "V");
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        Assert.False(doc.RootElement.TryGetProperty("allowed_keys", out _));
+    }
+
+    [Fact]
+    public async Task SetAsync_SendsWebhookUrl()
+    {
+        var handler = new MockHttpHandler();
+        var client = CreateOrgScopedClient("acme", handler);
+        handler.EnqueueOk(new { key = "K" });
+
+        await client.SetAsync("K", "V", webhookUrl: "https://hooks.example.com/sirr");
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        Assert.Equal("https://hooks.example.com/sirr", doc.RootElement.GetProperty("webhook_url").GetString());
+    }
+
+    [Fact]
+    public async Task SetAsync_OmitsWebhookUrl_WhenNull()
+    {
+        var handler = new MockHttpHandler();
+        var client = CreateOrgScopedClient("acme", handler);
+        handler.EnqueueOk(new { key = "K" });
+
+        await client.SetAsync("K", "V");
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        Assert.False(doc.RootElement.TryGetProperty("webhook_url", out _));
+    }
+
+    [Fact]
+    public async Task SetAsync_SendsSealOnExpiry_AsFalseDelete()
+    {
+        var handler = new MockHttpHandler();
+        var client = CreateOrgScopedClient("acme", handler);
+        handler.EnqueueOk(new { key = "K" });
+
+        // sealOnExpiry=true → delete=false
+        await client.SetAsync("K", "V", sealOnExpiry: true);
+
+        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
+        Assert.False(doc.RootElement.GetProperty("delete").GetBoolean());
     }
 
     // --- Patch ---
@@ -248,83 +381,33 @@ public sealed class SirrClientTests
         Assert.Null(status!.ReadsRemaining);
     }
 
-    [Fact]
-    public async Task PushAsync_SendsAllowedKeys_WhenOrgScoped()
-    {
-        var handler = new MockHttpHandler();
-        var client = CreateOrgScopedClient("my-org", handler);
-        handler.EnqueueOk(new { key = "K" });
-
-        await client.PushAsync("K", "V", allowedKeys: ["key-1", "key-2"]);
-
-        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
-        var arr = doc.RootElement.GetProperty("allowed_keys");
-        Assert.Equal(JsonValueKind.Array, arr.ValueKind);
-        Assert.Equal("key-1", arr[0].GetString());
-        Assert.Equal("key-2", arr[1].GetString());
-    }
-
-    [Fact]
-    public async Task PushAsync_OmitsAllowedKeys_WhenNotOrgScoped()
-    {
-        var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { key = "K" });
-
-        await client.PushAsync("K", "V", allowedKeys: ["key-1", "key-2"]);
-
-        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
-        Assert.False(doc.RootElement.TryGetProperty("allowed_keys", out _),
-            "allowed_keys must not be sent on public-bucket pushes");
-    }
-
-    [Fact]
-    public async Task PushAsync_OmitsAllowedKeys_WhenNull()
-    {
-        var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { key = "K" });
-
-        await client.PushAsync("K", "V");
-
-        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
-        Assert.False(doc.RootElement.TryGetProperty("allowed_keys", out _));
-    }
-
-    [Fact]
-    public async Task PushAsync_SendsWebhookUrl()
-    {
-        var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { key = "K" });
-
-        await client.PushAsync("K", "V", webhookUrl: "https://hooks.example.com/sirr");
-
-        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
-        Assert.Equal("https://hooks.example.com/sirr", doc.RootElement.GetProperty("webhook_url").GetString());
-    }
-
-    [Fact]
-    public async Task PushAsync_OmitsWebhookUrl_WhenNull()
-    {
-        var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { key = "K" });
-
-        await client.PushAsync("K", "V");
-
-        using var doc = JsonDocument.Parse(handler.Requests[0].Body!);
-        Assert.False(doc.RootElement.TryGetProperty("webhook_url", out _));
-    }
-
     // --- Get ---
 
     [Fact]
-    public async Task GetAsync_ReturnsValue_OnSuccess()
+    public async Task GetAsync_Public_RoutesToPublicPath()
     {
+        // Without org: GET /secrets/{id}
         var (client, handler) = CreateClient();
+        handler.EnqueueOk(new { id = "abc123", value = "secret-value" });
+
+        var result = await client.GetAsync("abc123");
+
+        Assert.Equal("secret-value", result);
+        Assert.Equal("/secrets/abc123", handler.Requests[0].RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task GetAsync_OrgScoped_RoutesToOrgPath()
+    {
+        // With org: GET /orgs/{org}/secrets/{key}
+        var handler = new MockHttpHandler();
+        var client = CreateOrgScopedClient("acme", handler);
         handler.EnqueueOk(new { key = "K", value = "secret-value" });
 
         var result = await client.GetAsync("K");
 
         Assert.Equal("secret-value", result);
-        Assert.Equal("/secrets/K", handler.Requests[0].RequestUri!.AbsolutePath);
+        Assert.Equal("/orgs/acme/secrets/K", handler.Requests[0].RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -351,14 +434,14 @@ public sealed class SirrClientTests
     }
 
     [Fact]
-    public async Task GetAsync_UrlEncodesKey()
+    public async Task GetAsync_UrlEncodesId()
     {
         var (client, handler) = CreateClient();
-        handler.EnqueueOk(new { key = "my/key", value = "v" });
+        handler.EnqueueOk(new { id = "my/id", value = "v" });
 
-        await client.GetAsync("my/key");
+        await client.GetAsync("my/id");
 
-        Assert.Equal("/secrets/my%2Fkey", handler.Requests[0].RequestUri!.AbsolutePath);
+        Assert.Equal("/secrets/my%2Fid", handler.Requests[0].RequestUri!.AbsolutePath);
     }
 
     // --- Delete ---
@@ -587,6 +670,20 @@ public sealed class SirrClientTests
         Assert.Contains("limit=10", uri);
     }
 
+    [Fact]
+    public async Task GetAuditLogAsync_SendsKeyFilter()
+    {
+        var handler = new MockHttpHandler();
+        var client = CreateOrgScopedClient("acme", handler);
+        handler.EnqueueOk(new { events = Array.Empty<object>() });
+
+        await client.GetAuditLogAsync(key: "MY_SECRET");
+
+        var uri = handler.Requests[0].RequestUri!.ToString();
+        Assert.Contains("key=MY_SECRET", uri);
+        Assert.Contains("/orgs/acme/audit", uri);
+    }
+
     // --- Webhooks ---
 
     [Fact]
@@ -640,15 +737,26 @@ public sealed class SirrClientTests
     // --- Org-scoped paths ---
 
     [Fact]
-    public async Task OrgClient_PushAsync_UsesOrgScopedPath()
+    public async Task OrgClient_SetAsync_UsesOrgScopedPath()
     {
         var handler = new MockHttpHandler();
         var client = CreateOrgScopedClient("acme", handler);
         handler.EnqueueOk(new { key = "K" });
 
-        await client.PushAsync("K", "V");
+        await client.SetAsync("K", "V");
 
         Assert.Equal("/orgs/acme/secrets", handler.Requests[0].RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task PublicClient_PushAsync_UsesPublicPath()
+    {
+        var (client, handler) = CreateClient();
+        handler.EnqueueOk(new { id = "hex64" });
+
+        await client.PushAsync("V");
+
+        Assert.Equal("/secrets", handler.Requests[0].RequestUri!.AbsolutePath);
     }
 
     [Fact]

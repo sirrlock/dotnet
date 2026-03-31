@@ -3,7 +3,7 @@ namespace Sirr;
 /// <summary>
 /// Thrown when the Sirr API returns a non-success status code.
 /// </summary>
-public sealed class SirrException : Exception
+public class SirrException : Exception
 {
     /// <summary>
     /// HTTP status code from the Sirr API response.

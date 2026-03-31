@@ -73,10 +73,19 @@ public sealed class SirrClient : ISirrClient, IDisposable
 
     private string OrgPrefix => _org is not null ? $"/orgs/{Uri.EscapeDataString(_org)}" : "";
 
-    private string SecretsPath(string? key = null) =>
+    /// <summary>Public dead-drop path: always /secrets or /secrets/{id}.</summary>
+    private static string PublicSecretsPath(string? id = null) =>
+        id is not null ? $"/secrets/{Uri.EscapeDataString(id)}" : "/secrets";
+
+    /// <summary>Org-scoped path: /orgs/{org}/secrets or /orgs/{org}/secrets/{key}.</summary>
+    private string OrgSecretsPath(string? key = null) =>
         key is not null
             ? $"{OrgPrefix}/secrets/{Uri.EscapeDataString(key)}"
             : $"{OrgPrefix}/secrets";
+
+    /// <summary>Routes to public or org-scoped secrets based on whether org is configured.</summary>
+    private string SecretsPath(string? key = null) =>
+        _org is not null ? OrgSecretsPath(key) : PublicSecretsPath(key);
 
     private string AuditPath() => $"{OrgPrefix}/audit";
 
@@ -107,12 +116,31 @@ public sealed class SirrClient : ISirrClient, IDisposable
     // --- Secrets ---
 
     /// <inheritdoc />
-    public async Task PushAsync(string key, string value, TimeSpan? ttl = null, int? reads = null, bool? sealOnExpiry = null, string? webhookUrl = null, string[]? allowedKeys = null, CancellationToken ct = default)
+    public async Task<PushResponse> PushAsync(string value, TimeSpan? ttl = null, int? reads = null, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        var payload = new PublicPushRequest
+        {
+            Value = value,
+            TtlSeconds = ttl.HasValue ? (long)ttl.Value.TotalSeconds : null,
+            MaxReads = reads,
+        };
+
+        var response = await SendAsync<PublicPushResponse>(HttpMethod.Post, "/secrets", payload, ct).ConfigureAwait(false);
+        return new PushResponse { Id = response.Id };
+    }
+
+    /// <inheritdoc />
+    public async Task<SetResponse> SetAsync(string key, string value, TimeSpan? ttl = null, int? reads = null, bool? sealOnExpiry = null, string? webhookUrl = null, string[]? allowedKeys = null, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(value);
 
-        var payload = new CreateSecretRequest
+        if (_org is null)
+            throw new InvalidOperationException("SetAsync requires an org. Configure SirrOptions.Org or use the SirrClient(httpClient, org) constructor.");
+
+        var payload = new OrgSetRequest
         {
             Key = key,
             Value = value,
@@ -122,11 +150,18 @@ public sealed class SirrClient : ISirrClient, IDisposable
             // sealOnExpiry=false/null → delete=true (burn-after-read, server default)
             Delete = sealOnExpiry.HasValue ? !sealOnExpiry.Value : null,
             WebhookUrl = webhookUrl,
-            // allowed_keys is only accepted by the org-scoped secret endpoint
-            AllowedKeys = _org is not null ? allowedKeys : null,
+            AllowedKeys = allowedKeys,
         };
 
-        await SendAsync<CreateSecretResponse>(HttpMethod.Post, SecretsPath(), payload, ct).ConfigureAwait(false);
+        try
+        {
+            var response = await SendAsync<OrgSetResponse>(HttpMethod.Post, OrgSecretsPath(), payload, ct).ConfigureAwait(false);
+            return new SetResponse { Key = response.Key };
+        }
+        catch (SirrException ex) when (ex.StatusCode == 409)
+        {
+            throw new SecretExistsException(key, ex.Message);
+        }
     }
 
     /// <inheritdoc />
@@ -178,15 +213,19 @@ public sealed class SirrClient : ISirrClient, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<string?> GetAsync(string key, CancellationToken ct = default)
+    public async Task<string?> GetAsync(string idOrKey, CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrEmpty(key);
+        ArgumentException.ThrowIfNullOrEmpty(idOrKey);
+
+        // Without org: GET /secrets/{id} (public dead-drop, idOrKey is the hex ID)
+        // With org: GET /orgs/{org}/secrets/{key} (org-scoped named secret)
+        var path = _org is not null ? OrgSecretsPath(idOrKey) : PublicSecretsPath(idOrKey);
 
         try
         {
             var response = await SendAsync<GetSecretResponse>(
                 HttpMethod.Get,
-                SecretsPath(key),
+                path,
                 content: null,
                 ct).ConfigureAwait(false);
 
@@ -265,13 +304,14 @@ public sealed class SirrClient : ISirrClient, IDisposable
     // --- Audit ---
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<AuditEvent>> GetAuditLogAsync(long? since = null, long? until = null, string? action = null, int? limit = null, CancellationToken ct = default)
+    public async Task<IReadOnlyList<AuditEvent>> GetAuditLogAsync(long? since = null, long? until = null, string? action = null, int? limit = null, string? key = null, CancellationToken ct = default)
     {
         var queryParts = new List<string>();
         if (since.HasValue) queryParts.Add($"since={since.Value}");
         if (until.HasValue) queryParts.Add($"until={until.Value}");
         if (action is not null) queryParts.Add($"action={Uri.EscapeDataString(action)}");
         if (limit.HasValue) queryParts.Add($"limit={limit.Value}");
+        if (key is not null) queryParts.Add($"key={Uri.EscapeDataString(key)}");
         var qs = queryParts.Count > 0 ? "?" + string.Join("&", queryParts) : "";
 
         var response = await SendAsync<AuditEventsResponse>(HttpMethod.Get, $"{AuditPath()}{qs}", content: null, ct)
@@ -488,9 +528,10 @@ public sealed class SirrClient : ISirrClient, IDisposable
             string? errorMessage = null;
             try
             {
-                var errorBody = await response.Content.ReadFromJsonAsync<ErrorResponse>(JsonOptions, ct)
+                var errorBody = await response.Content.ReadFromJsonAsync<ApiErrorResponse>(JsonOptions, ct)
                     .ConfigureAwait(false);
-                errorMessage = errorBody?.Error;
+                // Prefer human-readable "message" over machine code "error"
+                errorMessage = errorBody?.Message ?? errorBody?.Error;
             }
             catch (JsonException)
             {
