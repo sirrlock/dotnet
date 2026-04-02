@@ -446,6 +446,15 @@ public sealed class SirrClient : ISirrClient, IDisposable
     }
 
     /// <inheritdoc />
+    public async Task<KeyCreateResult> CreatePrincipalKeyAsync(string orgId, string principalId, string name, long? validForSeconds = null, CancellationToken ct = default)
+    {
+        var payload = new CreatePrincipalKeyRequest { Name = name, ValidForSeconds = validForSeconds };
+        return await SendAsync<KeyCreateResult>(HttpMethod.Post,
+            $"/orgs/{Uri.EscapeDataString(orgId)}/principals/{Uri.EscapeDataString(principalId)}/keys", payload, ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public async Task<bool> DeletePrincipalAsync(string orgId, string id, CancellationToken ct = default)
     {
         try

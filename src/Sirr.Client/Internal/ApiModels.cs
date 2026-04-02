@@ -192,6 +192,16 @@ internal sealed class ListPrincipalsResponse
     public required PrincipalResponse[] Principals { get; init; }
 }
 
+internal sealed class CreatePrincipalKeyRequest
+{
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    [JsonPropertyName("valid_for_seconds")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ValidForSeconds { get; init; }
+}
+
 internal sealed class CreateRoleRequest
 {
     [JsonPropertyName("name")]

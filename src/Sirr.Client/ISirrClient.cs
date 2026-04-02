@@ -154,6 +154,11 @@ public interface ISirrClient
     Task<IReadOnlyList<PrincipalResponse>> ListPrincipalsAsync(string orgId, CancellationToken ct = default);
 
     /// <summary>
+    /// Creates an API key for a principal in an organization (master-key only).
+    /// </summary>
+    Task<KeyCreateResult> CreatePrincipalKeyAsync(string orgId, string principalId, string name, long? validForSeconds = null, CancellationToken ct = default);
+
+    /// <summary>
     /// Deletes a principal by ID from an organization. Returns <c>false</c> if it did not exist.
     /// </summary>
     Task<bool> DeletePrincipalAsync(string orgId, string id, CancellationToken ct = default);
